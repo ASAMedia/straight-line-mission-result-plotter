@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Straight Line Mission Plotter</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; color: #212529; }
+
+  #sidebar {
+    width: 400px;
+    background: #f8f9fa;
+    border-right: 1px solid #dee2e6;
+    overflow-y: auto;
+    padding: 18px;
+    flex-shrink: 0;
+  }
+  #map { flex: 1; }
+
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .subtitle { font-size: 12px; color: #6c757d; margin-bottom: 16px; }
+  h2 {
+    font-size: 12px;
+    margin: 18px 0 8px;
+    color: #495057;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  .drop {
+    display: block;
+    border: 2px dashed #adb5bd;
+    border-radius: 6px;
+    padding: 14px;
+    background: white;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    overflow: hidden;
+  }
+  .drop:hover, .drop.drag { border-color: #0d6efd; background: #eef5ff; }
+  .drop input[type=file] { display: none; }
+  .drop-label {
+    font-size: 13px;
+    color: #495057;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .file-loaded {
+    color: #198754;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .file-error { color: #dc3545; }
+
+  .team {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+  }
+  .team-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .team-color {
+    width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;
+    cursor: pointer;
+    border: 1px solid rgba(0,0,0,0.1);
+  }
+  .team-name {
+    flex: 1;
+    border: 1px solid transparent;
+    font-weight: 500;
+    font-size: 14px;
+    background: transparent;
+    padding: 4px 6px;
+    border-radius: 4px;
+  }
+  .team-name:focus, .team-name:hover { border-color: #dee2e6; background: #f8f9fa; outline: none; }
+  .team-remove {
+    border: none;
+    background: transparent;
+    color: #adb5bd;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 6px;
+  }
+  .team-remove:hover { color: #dc3545; }
+  .team-stats {
+    font-size: 12px;
+    color: #495057;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #f1f3f5;
+    line-height: 1.6;
+  }
+  .team-stats strong { color: #212529; }
+  .team-stats .hint { color: #adb5bd; font-style: italic; }
+
+  button.primary {
+    width: 100%;
+    padding: 10px;
+    background: #0d6efd;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  button.primary:hover { background: #0b5ed7; }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 11px;
+    background: #e9ecef;
+    border-radius: 3px;
+    color: #495057;
+    margin-left: 4px;
+  }
+
+  .legend {
+    background: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .legend-row { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 20px; height: 3px; display: inline-block; }
+  .legend-swatch.dashed { border-top: 3px dashed #000; height: 0; }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid #fff; background: #666;
+    box-shadow: 0 0 0 1px #333;
+  }
+
+  #colorPicker {
+    position: absolute;
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    display: none;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+    z-index: 1000;
+  }
+  .color-swatch {
+    width: 22px; height: 22px; border-radius: 3px; cursor: pointer;
+    border: 2px solid transparent;
+  }
+  .color-swatch:hover { border-color: #212529; }
+
+  .info-card {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #495057;
+  }
+  .info-card strong { color: #212529; }
+  .team-stats .info-row,
+  .info-card .info-row,
+  .more-body .info-row {
+    display: grid !important;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: baseline;
+  }
+  .info-row > span:first-child { color: #6c757d; }
+  .info-row > strong { text-align: right; }
+  .profile {
+    width: 100%;
+    height: 60px;
+    margin-top: 8px;
+    background: #f8f9fa;
+    border-radius: 4px;
+    display: block;
+  }
+  .profile-label {
+    font-size: 11px;
+    color: #6c757d;
+    margin-top: 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  details.more { margin-top: 6px; }
+  details.more > summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: #0d6efd;
+    padding: 2px 0;
+    list-style: none;
+    user-select: none;
+  }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before {
+    content: '▸';
+    display: inline-block;
+    transition: transform 0.15s;
+    margin-right: 4px;
+    font-size: 10px;
+  }
+  details.more[open] > summary::before { transform: rotate(90deg); }
+  details.more > summary:hover { color: #0b5ed7; }
+  details.more > .more-body { padding-top: 4px; }
+
+  .medal {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    border: 1px solid;
+    line-height: 1.3;
+    position: relative;
+    cursor: help;
+  }
+  .medal:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    padding: 8px 10px;
+    background: #212529;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: normal;
+    border-radius: 4px;
+    white-space: pre;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    z-index: 1000;
+    pointer-events: none;
+    line-height: 1.5;
+  }
+  .medal:hover::before {
+    content: '';
+    position: absolute;
+    bottom: calc(100% + 3px);
+    right: 14px;
+    border: 5px solid transparent;
+    border-top-color: #212529;
+    z-index: 1001;
+    pointer-events: none;
+  }
+  .medal-platinum {
+    background: linear-gradient(135deg, #f5f5f7 0%, #c9ccd0 100%);
+    border-color: #a8acae;
+    color: #3c3c3c;
+  }
+  .medal-gold {
+    background: linear-gradient(135deg, #ffef9c 0%, #d4a820 100%);
+    border-color: #b8941a;
+    color: #5c4500;
+  }
+  .medal-silver {
+    background: linear-gradient(135deg, #ececec 0%, #a8a8a8 100%);
+    border-color: #8e8e8e;
+    color: #333;
+  }
+  .medal-bronze {
+    background: linear-gradient(135deg, #e0a572 0%, #9c5a24 100%);
+    border-color: #7a4518;
+    color: #fff;
+  }
+  .medal-none {
+    background: #f1f3f5;
+    border-color: #dee2e6;
+    color: #6c757d;
+    font-weight: 500;
+  }
+
+  .basemap-switcher {
+    display: flex;
+    gap: 6px;
+    background: white;
+    padding: 8px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    font-family: 'Google Sans', Roboto, Arial, sans-serif;
+  }
+  .basemap-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    font-family: inherit;
+    border-radius: 8px;
+    width: 66px;
+  }
+  .basemap-thumb {
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    background-color: #e9ecef;
+    background-size: cover;
+    background-position: center;
+    border: 2px solid transparent;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+    transition: box-shadow 0.15s, transform 0.15s;
+  }
+  .basemap-option:hover .basemap-thumb {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+    transform: translateY(-1px);
+  }
+  .basemap-option.active .basemap-thumb {
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 1px #1a73e8;
+  }
+  .basemap-label {
+    font-size: 12px;
+    color: #3c4043;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+  .basemap-option.active .basemap-label {
+    color: #1a73e8;
+  }
+
+  .leaderboard-panel {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+    width: 340px;
+    max-width: calc(100vw - 432px);
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+  }
+  .leaderboard-panel .panel-header {
+    padding: 10px 14px;
+    background: #212529;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+  }
+  .leaderboard {
+    background: white;
+    font-size: 12px;
+  }
+  .leaderboard-empty {
+    padding: 14px 12px;
+    color: #adb5bd;
+    font-style: italic;
+    text-align: center;
+    font-size: 12px;
+  }
+  .leaderboard-row {
+    display: grid;
+    grid-template-columns: 22px 10px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    border-bottom: 1px solid #f1f3f5;
+  }
+  .leaderboard-row:last-child { border-bottom: none; }
+  .leaderboard-rank {
+    font-weight: 700;
+    color: #868e96;
+    text-align: center;
+    font-size: 13px;
+  }
+  .leaderboard-rank.rank-1 { color: #b8941a; }
+  .leaderboard-rank.rank-2 { color: #6c757d; }
+  .leaderboard-rank.rank-3 { color: #9c5a24; }
+  .leaderboard-color {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }
+  .leaderboard-name {
+    font-weight: 500;
+    color: #212529;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .leaderboard-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #495057;
+    font-variant-numeric: tabular-nums;
+  }
+  .leaderboard-meta .medal {
+    padding: 2px 7px;
+    font-size: 10px;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>Straight Line Mission Plotter</h1>
+    <div class="subtitle">Plot planned lines vs. actual GPS tracks and find each team's max deviation.</div>
+
+    <h2>Planned Straight Line</h2>
+    <label class="drop" id="plannedDrop">
+      <input type="file" id="plannedFile" accept=".gpx">
+      <div class="drop-label" id="plannedLabel">Click or drop a GPX file</div>
+    </label>
+    <div id="plannedInfo" class="info-card" style="display:none"></div>
+
+    <h2>Teams</h2>
+    <div id="teams"></div>
+    <button class="primary" id="addTeam">+ Add Team</button>
+  </div>
+  <div id="map"></div>
+
+  <div id="basemapSwitcher" class="basemap-switcher">
+    <button class="basemap-option active" data-layer="street" type="button">
+      <div class="basemap-thumb" style="background-image: url('https://a.basemaps.cartocdn.com/rastertiles/voyager/10/534/361.png')"></div>
+      <div class="basemap-label">Street</div>
+    </button>
+    <button class="basemap-option" data-layer="topo" type="button">
+      <div class="basemap-thumb" style="background-image: url('https://a.tile.opentopomap.org/10/534/361.png')"></div>
+      <div class="basemap-label">Topo</div>
+    </button>
+    <button class="basemap-option" data-layer="satellite" type="button">
+      <div class="basemap-thumb" style="background-image: url('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/10/361/534')"></div>
+      <div class="basemap-label">Satellite</div>
+    </button>
+  </div>
+
+  <div id="leaderboardPanel" class="leaderboard-panel">
+    <div class="panel-header">Leaderboard</div>
+    <div id="leaderboard" class="leaderboard"></div>
+  </div>
+
+  <div id="colorPicker"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// Lazy-load the FIT parser only when a .fit file is actually used, so that a
+// failure to reach the CDN doesn't break GPX parsing or the rest of the UI.
+let _fitParserPromise = null;
+function getFitParser() {
+  if (!_fitParserPromise) {
+    _fitParserPromise = import('https://esm.sh/fit-file-parser')
+      .then(m => m.default || m.FitParser || m);
+  }
+  return _fitParserPromise;
+}
+
+// ---------- Geographic math ----------
+const R_EARTH = 6371000;
+const toRad = d => d * Math.PI / 180;
+const toDeg = r => r * 180 / Math.PI;
+
+function haversine(p1, p2) {
+  const dLat = toRad(p2.lat - p1.lat);
+  const dLon = toRad(p2.lon - p1.lon);
+  const a = Math.sin(dLat / 2) ** 2
+          + Math.cos(toRad(p1.lat)) * Math.cos(toRad(p2.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R_EARTH * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function initialBearing(p1, p2) {
+  const phi1 = toRad(p1.lat), phi2 = toRad(p2.lat);
+  const dLon = toRad(p2.lon - p1.lon);
+  const y = Math.sin(dLon) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
+  return Math.atan2(y, x);
+}
+
+function destinationPoint(p, bearing, distance) {
+  const delta = distance / R_EARTH;
+  const phi1 = toRad(p.lat), lam1 = toRad(p.lon);
+  const phi2 = Math.asin(Math.sin(phi1) * Math.cos(delta)
+            + Math.cos(phi1) * Math.sin(delta) * Math.cos(bearing));
+  const lam2 = lam1 + Math.atan2(
+    Math.sin(bearing) * Math.sin(delta) * Math.cos(phi1),
+    Math.cos(delta) - Math.sin(phi1) * Math.sin(phi2)
+  );
+  return { lat: toDeg(phi2), lon: toDeg(lam2) };
+}
+
+// Great-circle cross-track distance (signed) and along-track distance
+function crossTrack(p, a, b) {
+  const d13 = haversine(a, p) / R_EARTH;
+  if (d13 === 0) return { xtd: 0, atd: 0, d12: haversine(a, b) / R_EARTH };
+  const bear13 = initialBearing(a, p);
+  const bear12 = initialBearing(a, b);
+  const xtd = Math.asin(Math.sin(d13) * Math.sin(bear13 - bear12));
+  const atd = Math.acos(Math.cos(d13) / Math.cos(xtd));
+  const d12 = haversine(a, b) / R_EARTH;
+  return { xtd, atd, d12, bear12 };
+}
+
+// Shortest distance from p to segment a-b (in meters), clamped to segment endpoints
+function pointToSegmentDistance(p, a, b) {
+  const { xtd, atd, d12 } = crossTrack(p, a, b);
+  if (isNaN(atd) || atd < 0) return haversine(a, p);
+  if (atd > d12) return haversine(b, p);
+  return Math.abs(xtd) * R_EARTH;
+}
+
+// Projection (foot of perpendicular) of p onto segment a-b
+function nearestPointOnSegment(p, a, b) {
+  const { xtd, atd, d12, bear12 } = crossTrack(p, a, b);
+  if (isNaN(atd) || atd <= 0) return a;
+  if (atd >= d12) return b;
+  return destinationPoint(a, bear12, atd * R_EARTH);
+}
+
+// Min distance from p to a polyline; returns { distance, segmentIndex, foot }
+function minDistanceToPolyline(p, line) {
+  let best = { distance: Infinity, segmentIndex: 0, foot: line[0] };
+  for (let i = 0; i < line.length - 1; i++) {
+    const d = pointToSegmentDistance(p, line[i], line[i + 1]);
+    if (d < best.distance) {
+      best = {
+        distance: d,
+        segmentIndex: i,
+        foot: nearestPointOnSegment(p, line[i], line[i + 1])
+      };
+    }
+  }
+  return best;
+}
+
+function trackLength(track) {
+  let total = 0;
+  for (let i = 0; i < track.length - 1; i++) total += haversine(track[i], track[i + 1]);
+  return total;
+}
+
+// Cumulative distance along a track (meters) — useful for x-axis of elevation profile.
+function cumulativeDistances(track) {
+  const out = [0];
+  for (let i = 1; i < track.length; i++) {
+    out.push(out[i - 1] + haversine(track[i - 1], track[i]));
+  }
+  return out;
+}
+
+// Elevation stats for a track. Uses a small threshold to suppress GPS noise
+// when summing ascent/descent.
+function elevationStats(track, noiseThresholdMeters = 1) {
+  const eles = track.map(p => p.ele).filter(e => typeof e === 'number' && isFinite(e));
+  if (eles.length === 0) return null;
+  let min = Infinity, max = -Infinity, ascent = 0, descent = 0;
+  for (const e of eles) { if (e < min) min = e; if (e > max) max = e; }
+  let lastSig = eles[0];
+  for (let i = 1; i < eles.length; i++) {
+    const diff = eles[i] - lastSig;
+    if (Math.abs(diff) >= noiseThresholdMeters) {
+      if (diff > 0) ascent += diff; else descent += -diff;
+      lastSig = eles[i];
+    }
+  }
+  return {
+    min, max,
+    range: max - min,
+    ascent, descent,
+    net: eles[eles.length - 1] - eles[0],
+    count: eles.length
+  };
+}
+
+function computeMedal(maxDeviationMeters) {
+  if (maxDeviationMeters <= 25) return { name: 'Platinum', className: 'medal-platinum' };
+  if (maxDeviationMeters <= 50) return { name: 'Gold', className: 'medal-gold' };
+  if (maxDeviationMeters <= 75) return { name: 'Silver', className: 'medal-silver' };
+  if (maxDeviationMeters <= 100) return { name: 'Bronze', className: 'medal-bronze' };
+  return { name: 'No medal', className: 'medal-none' };
+}
+
+function formatCoord(lat, lon) {
+  const ns = lat >= 0 ? 'N' : 'S';
+  const ew = lon >= 0 ? 'E' : 'W';
+  return `${Math.abs(lat).toFixed(5)}°${ns}, ${Math.abs(lon).toFixed(5)}°${ew}`;
+}
+
+// ---------- Parsers ----------
+function parseGpx(text) {
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  if (xml.getElementsByTagName('parsererror').length) throw new Error('Invalid GPX file');
+  const points = [];
+  // Use getElementsByTagNameNS with '*' so we match elements regardless of the
+  // GPX default namespace (querySelectorAll won't match namespaced XML by local name).
+  const getAll = tag => Array.from(xml.getElementsByTagNameNS('*', tag));
+  const push = el => {
+    const findChild = name => Array.from(el.children).find(c => c.localName === name);
+    const eleEl = findChild('ele');
+    const timeEl = findChild('time');
+    const ele = eleEl ? parseFloat(eleEl.textContent) : null;
+    points.push({
+      lat: parseFloat(el.getAttribute('lat')),
+      lon: parseFloat(el.getAttribute('lon')),
+      ele: isFinite(ele) ? ele : null,
+      time: timeEl?.textContent
+    });
+  };
+  getAll('trkpt').forEach(push);
+  if (points.length === 0) getAll('rtept').forEach(push);
+  if (points.length === 0) getAll('wpt').forEach(push);
+  return points.filter(p => isFinite(p.lat) && isFinite(p.lon));
+}
+
+async function parseFit(arrayBuffer) {
+  const FitParser = await getFitParser();
+  const parser = new FitParser({
+    force: true,
+    speedUnit: 'km/h',
+    lengthUnit: 'm',
+    temperatureUnit: 'celsius',
+    elapsedRecordField: true,
+    mode: 'list',
+  });
+  return new Promise((resolve, reject) => {
+    parser.parse(arrayBuffer, (err, data) => {
+      if (err) return reject(new Error(err));
+      const records = (data && data.records) || [];
+      const points = records
+        .filter(r => typeof r.position_lat === 'number' && typeof r.position_long === 'number')
+        .map(r => ({
+          lat: r.position_lat,
+          lon: r.position_long,
+          ele: typeof r.altitude === 'number' ? r.altitude
+             : typeof r.enhanced_altitude === 'number' ? r.enhanced_altitude
+             : null,
+          time: r.timestamp
+        }));
+      resolve(points);
+    });
+  });
+}
+
+async function parseFile(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.gpx')) return parseGpx(await file.text());
+  if (name.endsWith('.fit')) return parseFit(await file.arrayBuffer());
+  throw new Error('Unsupported file type (expected .gpx or .fit)');
+}
+
+// ---------- Map setup ----------
+const map = L.map('map').setView([51.5, -0.1], 5);
+// CartoDB Voyager — OSM-based tiles that work from file:// origins
+// (osm.org blocks file:// via their tile usage policy).
+const streetLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap contributors © CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19
+});
+
+// OpenTopoMap — shows contour lines (Isohypsen) and elevation shading.
+const topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+  attribution: 'Map data © OpenStreetMap contributors, SRTM | © OpenTopoMap (CC-BY-SA)',
+  subdomains: 'abc',
+  maxZoom: 17
+});
+
+// Esri World Imagery — free satellite basemap, no API key required.
+const satelliteLayer = L.tileLayer(
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  {
+    attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics',
+    maxZoom: 19
+  }
+);
+
+streetLayer.addTo(map);
+
+// Mount the basemap switcher as a Leaflet bottom-left control so it's
+// anchored inside the map area (not the viewport) — keeps it clear of the sidebar.
+const BasemapSwitcherControl = L.Control.extend({
+  options: { position: 'bottomleft' },
+  onAdd() {
+    const el = document.getElementById('basemapSwitcher');
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+    return el;
+  }
+});
+new BasemapSwitcherControl().addTo(map);
+
+const basemapLayers = { street: streetLayer, topo: topoLayer, satellite: satelliteLayer };
+let currentBasemap = 'street';
+document.querySelectorAll('.basemap-option').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const key = btn.dataset.layer;
+    if (key === currentBasemap) return;
+    map.removeLayer(basemapLayers[currentBasemap]);
+    basemapLayers[key].addTo(map);
+    document.querySelector('.basemap-option.active')?.classList.remove('active');
+    btn.classList.add('active');
+    currentBasemap = key;
+  });
+});
+
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = () => {
+  const div = L.DomUtil.create('div', 'legend');
+  div.innerHTML = `
+    <div class="legend-row"><span class="legend-swatch dashed"></span> Planned line</div>
+    <div class="legend-row"><span class="legend-swatch" style="background:#e6194b"></span> Team track</div>
+    <div class="legend-row"><span class="legend-dot"></span> Max deviation point</div>
+  `;
+  return div;
+};
+legend.addTo(map);
+
+// ---------- State ----------
+let plannedLine = null;
+let plannedLayer = null;
+const teams = new Map();
+const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+                '#42d4f4', '#f032e6', '#bfef45', '#fabebe', '#469990',
+                '#dcbeff', '#9a6324', '#800000', '#808000', '#000075'];
+let teamCounter = 0;
+
+function pickColor() {
+  const used = new Set([...teams.values()].map(t => t.color));
+  for (const c of COLORS) if (!used.has(c)) return c;
+  return COLORS[teams.size % COLORS.length];
+}
+
+// ---------- Drawing ----------
+function drawPlanned() {
+  if (plannedLayer) { map.removeLayer(plannedLayer); plannedLayer = null; }
+  if (!plannedLine || plannedLine.length < 2) return;
+  plannedLayer = L.polyline(plannedLine.map(p => [p.lat, p.lon]), {
+    color: '#000',
+    weight: 4,
+    opacity: 0.9,
+    dashArray: '10,6'
+  }).addTo(map);
+  plannedLayer.bindTooltip('Planned line', { sticky: true });
+}
+
+function clearTeamLayers(team) {
+  ['layer', 'marker', 'devLine'].forEach(k => {
+    if (team[k]) { map.removeLayer(team[k]); team[k] = null; }
+  });
+}
+
+function drawTeam(team) {
+  clearTeamLayers(team);
+  if (team.points.length < 1) return;
+
+  team.layer = L.polyline(team.points.map(p => [p.lat, p.lon]), {
+    color: team.color,
+    weight: 3.5,
+    opacity: 0.85
+  }).addTo(map);
+  team.layer.bindTooltip(team.name, { sticky: true });
+
+  if (team.stats && team.stats.maxDeviationPoint) {
+    const p = team.stats.maxDeviationPoint;
+    const foot = team.stats.maxDeviationFoot;
+
+    team.devLine = L.polyline(
+      [[p.lat, p.lon], [foot.lat, foot.lon]],
+      { color: team.color, weight: 2, dashArray: '3,5', opacity: 0.8 }
+    ).addTo(map);
+
+    team.marker = L.circleMarker([p.lat, p.lon], {
+      radius: 8,
+      color: '#fff',
+      weight: 2,
+      fillColor: team.color,
+      fillOpacity: 1
+    }).addTo(map);
+    team.marker.bindTooltip(
+      `<b>${escapeHtml(team.name)}</b><br>Max deviation: ${team.stats.maxDeviation.toFixed(1)} m`,
+      { sticky: true }
+    );
+  }
+}
+
+function computeTeamStats(team) {
+  if (!plannedLine || plannedLine.length < 2 || team.points.length === 0) {
+    team.stats = null;
+    return;
+  }
+  let maxDev = -1, maxPoint = null, maxFoot = null;
+  for (const p of team.points) {
+    const { distance, foot } = minDistanceToPolyline(p, plannedLine);
+    if (distance > maxDev) {
+      maxDev = distance; maxPoint = p; maxFoot = foot;
+    }
+  }
+  team.stats = {
+    maxDeviation: maxDev,
+    maxDeviationPoint: maxPoint,
+    maxDeviationFoot: maxFoot,
+    totalLength: trackLength(team.points),
+    pointCount: team.points.length
+  };
+}
+
+function renderLeaderboard() {
+  const container = document.getElementById('leaderboard');
+  const ranked = [...teams.values()]
+    .filter(t => t.stats)
+    .sort((a, b) => a.stats.maxDeviation - b.stats.maxDeviation);
+
+  if (ranked.length === 0) {
+    container.innerHTML = '<div class="leaderboard-empty">Load a planned line and team tracks to rank teams.</div>';
+    return;
+  }
+
+  container.innerHTML = ranked.map((t, i) => {
+    const rank = i + 1;
+    const medal = computeMedal(t.stats.maxDeviation);
+    const rankClass = rank <= 3 ? `rank-${rank}` : '';
+    return `
+      <div class="leaderboard-row">
+        <div class="leaderboard-rank ${rankClass}">${rank}</div>
+        <div class="leaderboard-color" style="background:${t.color}"></div>
+        <div class="leaderboard-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</div>
+        <div class="leaderboard-meta">
+          <span class="medal ${medal.className}">${medal.name}</span>
+          <strong>${t.stats.maxDeviation.toFixed(1)} m</strong>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderPlannedInfo() {
+  const panel = document.getElementById('plannedInfo');
+  if (!plannedLine || plannedLine.length < 2) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  const start = plannedLine[0];
+  const end = plannedLine[plannedLine.length - 1];
+  const gcDist = haversine(start, end);
+  const polyDist = trackLength(plannedLine);
+  const bear = (initialBearing(start, end) * 180 / Math.PI + 360) % 360;
+  const ele = elevationStats(plannedLine);
+  const eleRows = ele ? `
+    <div class="info-row"><span>Elevation range</span><strong>${ele.min.toFixed(0)} – ${ele.max.toFixed(0)} m</strong></div>
+    <div class="info-row"><span>Total ascent</span><strong>+${ele.ascent.toFixed(0)} m</strong></div>
+    <div class="info-row"><span>Total descent</span><strong>−${ele.descent.toFixed(0)} m</strong></div>
+  ` : '';
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <div class="info-row"><span>Straight-line distance</span><strong>${(gcDist / 1000).toFixed(3)} km</strong></div>
+    <div class="info-row"><span>Waypoints</span><strong>${plannedLine.length.toLocaleString()}</strong></div>
+    <details class="more">
+      <summary>More details</summary>
+      <div class="more-body">
+        <div class="info-row"><span>Start</span><strong>${formatCoord(start.lat, start.lon)}</strong></div>
+        <div class="info-row"><span>End</span><strong>${formatCoord(end.lat, end.lon)}</strong></div>
+        <div class="info-row"><span>Polyline length</span><strong>${(polyDist / 1000).toFixed(3)} km</strong></div>
+        <div class="info-row"><span>Initial bearing</span><strong>${bear.toFixed(1)}°</strong></div>
+        ${eleRows}
+        ${buildElevationProfile(plannedLine, '#212529')}
+      </div>
+    </details>
+  `;
+}
+
+function fitMap() {
+  const bounds = [];
+  if (plannedLine) plannedLine.forEach(p => bounds.push([p.lat, p.lon]));
+  teams.forEach(t => t.points.forEach(p => bounds.push([p.lat, p.lon])));
+  if (bounds.length > 0) map.fitBounds(bounds, { padding: [50, 50] });
+}
+
+// ---------- UI ----------
+const teamsContainer = document.getElementById('teams');
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// Build an inline SVG sparkline showing the elevation profile along the track.
+function buildElevationProfile(track, color = '#0d6efd') {
+  const eles = track.map(p => p.ele);
+  if (!eles.some(e => typeof e === 'number' && isFinite(e))) return '';
+  const dists = cumulativeDistances(track);
+  const totalDist = dists[dists.length - 1] || 1;
+  const valid = [];
+  for (let i = 0; i < track.length; i++) {
+    if (typeof eles[i] === 'number' && isFinite(eles[i])) {
+      valid.push({ d: dists[i], e: eles[i] });
+    }
+  }
+  if (valid.length < 2) return '';
+  const W = 360, H = 60, PAD = 2;
+  const minE = Math.min(...valid.map(v => v.e));
+  const maxE = Math.max(...valid.map(v => v.e));
+  const range = maxE - minE || 1;
+  const xOf = d => PAD + (d / totalDist) * (W - 2 * PAD);
+  const yOf = e => H - PAD - ((e - minE) / range) * (H - 2 * PAD);
+  const line = valid.map((v, i) => `${i === 0 ? 'M' : 'L'}${xOf(v.d).toFixed(1)},${yOf(v.e).toFixed(1)}`).join(' ');
+  const area = `${line} L${xOf(valid[valid.length - 1].d).toFixed(1)},${H - PAD} L${xOf(valid[0].d).toFixed(1)},${H - PAD} Z`;
+  const distLabel = totalDist >= 1000
+    ? `${(totalDist / 1000).toFixed(2)} km`
+    : `${totalDist.toFixed(0)} m`;
+  return `
+    <svg class="profile" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <path d="${area}" fill="${color}" fill-opacity="0.18" />
+      <path d="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" />
+    </svg>
+    <div class="profile-label">
+      <span>${minE.toFixed(0)} m</span>
+      <span>${distLabel}</span>
+      <span>${maxE.toFixed(0)} m</span>
+    </div>
+  `;
+}
+
+function enableDrop(wrapper, input, onChange) {
+  wrapper.addEventListener('dragover', e => {
+    e.preventDefault(); wrapper.classList.add('drag');
+  });
+  wrapper.addEventListener('dragleave', () => wrapper.classList.remove('drag'));
+  wrapper.addEventListener('drop', e => {
+    e.preventDefault();
+    wrapper.classList.remove('drag');
+    const file = e.dataTransfer.files[0];
+    if (file) onChange(file);
+  });
+  input.addEventListener('change', () => {
+    if (input.files[0]) onChange(input.files[0]);
+  });
+}
+
+function renderTeamStats(team) {
+  const el = team.element.querySelector('.team-stats');
+  if (team.points.length === 0) { el.innerHTML = ''; return; }
+  const ele = elevationStats(team.points);
+  const length = trackLength(team.points);
+  let deviationRow, medalRow = '';
+  if (team.stats) {
+    deviationRow = `<div class="info-row"><span>Max deviation</span><strong>${team.stats.maxDeviation.toFixed(1)} m</strong></div>`;
+    const medal = computeMedal(team.stats.maxDeviation);
+    const tooltip = 'Platinum  ≤  25 m\nGold      ≤  50 m\nSilver    ≤  75 m\nBronze    ≤ 100 m';
+    medalRow = `<div class="info-row"><span>Medal</span><span class="medal ${medal.className}" data-tooltip="${tooltip}">${medal.name}</span></div>`;
+  } else {
+    deviationRow = `<div><span class="hint">Load a planned line to see deviation</span></div>`;
+  }
+  const eleRows = ele ? `
+    <div class="info-row"><span>Elevation range</span><strong>${ele.min.toFixed(0)} – ${ele.max.toFixed(0)} m</strong></div>
+    <div class="info-row"><span>Total ascent</span><strong>+${ele.ascent.toFixed(0)} m</strong></div>
+    <div class="info-row"><span>Total descent</span><strong>−${ele.descent.toFixed(0)} m</strong></div>
+  ` : '';
+  const hasMore = ele || team.points.length > 0;
+  el.innerHTML = `
+    <div class="info-row"><span>Distance walked</span><strong>${(length / 1000).toFixed(2)} km</strong></div>
+    ${deviationRow}
+    ${medalRow}
+    ${hasMore ? `
+      <details class="more">
+        <summary>More details</summary>
+        <div class="more-body">
+          <div class="info-row"><span>Track points</span><strong>${team.points.length.toLocaleString()}</strong></div>
+          ${eleRows}
+          ${buildElevationProfile(team.points, team.color)}
+        </div>
+      </details>
+    ` : ''}
+  `;
+}
+
+function renderTeam(team) {
+  const el = document.createElement('div');
+  el.className = 'team';
+  el.innerHTML = `
+    <div class="team-header">
+      <div class="team-color" title="Change color"></div>
+      <input type="text" class="team-name" value="${escapeHtml(team.name)}">
+      <button class="team-remove" title="Remove team">×</button>
+    </div>
+    <label class="drop">
+      <input type="file" accept=".gpx,.fit">
+      <div class="drop-label">Click or drop GPX / FIT</div>
+    </label>
+    <div class="team-stats"></div>
+  `;
+  team.element = el;
+
+  const swatch = el.querySelector('.team-color');
+  swatch.style.background = team.color;
+  swatch.addEventListener('click', e => {
+    e.preventDefault();
+    openColorPicker(swatch, team);
+  });
+
+  el.querySelector('.team-name').addEventListener('input', e => {
+    team.name = e.target.value || `Team ${team.id}`;
+    if (team.layer) team.layer.bindTooltip(team.name, { sticky: true });
+    if (team.marker) {
+      team.marker.bindTooltip(
+        `<b>${escapeHtml(team.name)}</b><br>Max deviation: ${team.stats.maxDeviation.toFixed(1)} m`,
+        { sticky: true }
+      );
+    }
+    renderLeaderboard();
+  });
+
+  el.querySelector('.team-remove').addEventListener('click', () => {
+    clearTeamLayers(team);
+    teams.delete(team.id);
+    el.remove();
+    renderLeaderboard();
+  });
+
+  const drop = el.querySelector('.drop');
+  const input = drop.querySelector('input');
+  const label = drop.querySelector('.drop-label');
+  enableDrop(drop, input, async file => {
+    label.textContent = 'Parsing…';
+    try {
+      team.points = await parseFile(file);
+      if (team.points.length === 0) {
+        label.innerHTML = `<span class="file-error">No GPS points found in ${escapeHtml(file.name)}</span>`;
+        return;
+      }
+      label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${team.points.length.toLocaleString()} pts</span>`;
+      computeTeamStats(team);
+      drawTeam(team);
+      renderTeamStats(team);
+      renderLeaderboard();
+      fitMap();
+    } catch (err) {
+      console.error(err);
+      label.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
+    }
+  });
+
+  teamsContainer.appendChild(el);
+}
+
+function addTeam() {
+  const id = ++teamCounter;
+  const team = {
+    id, name: `Team ${id}`, color: pickColor(),
+    points: [], stats: null,
+    layer: null, marker: null, devLine: null,
+    element: null
+  };
+  teams.set(id, team);
+  renderTeam(team);
+  return team;
+}
+
+// Color picker
+const colorPicker = document.getElementById('colorPicker');
+COLORS.forEach(c => {
+  const s = document.createElement('div');
+  s.className = 'color-swatch';
+  s.style.background = c;
+  s.dataset.color = c;
+  colorPicker.appendChild(s);
+});
+let colorPickerTarget = null;
+function openColorPicker(swatchEl, team) {
+  const rect = swatchEl.getBoundingClientRect();
+  colorPicker.style.display = 'grid';
+  colorPicker.style.left = (rect.left + window.scrollX) + 'px';
+  colorPicker.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+  colorPickerTarget = { swatchEl, team };
+}
+colorPicker.addEventListener('click', e => {
+  const c = e.target.dataset.color;
+  if (!c || !colorPickerTarget) return;
+  const { swatchEl, team } = colorPickerTarget;
+  team.color = c;
+  swatchEl.style.background = c;
+  drawTeam(team);
+  renderTeamStats(team);
+  renderLeaderboard();
+  colorPicker.style.display = 'none';
+});
+document.addEventListener('click', e => {
+  if (!colorPicker.contains(e.target) && !e.target.classList.contains('team-color')) {
+    colorPicker.style.display = 'none';
+  }
+});
+
+// Planned file
+const plannedDrop = document.getElementById('plannedDrop');
+const plannedInput = document.getElementById('plannedFile');
+const plannedLabel = document.getElementById('plannedLabel');
+enableDrop(plannedDrop, plannedInput, async file => {
+  plannedLabel.textContent = 'Parsing…';
+  try {
+    const pts = await parseFile(file);
+    if (pts.length < 2) {
+      plannedLabel.innerHTML = `<span class="file-error">Need at least 2 points for a line</span>`;
+      return;
+    }
+    plannedLine = pts;
+    plannedLabel.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${pts.length.toLocaleString()} pts</span>`;
+    drawPlanned();
+    renderPlannedInfo();
+    for (const team of teams.values()) {
+      computeTeamStats(team);
+      drawTeam(team);
+      renderTeamStats(team);
+    }
+    renderLeaderboard();
+    fitMap();
+  } catch (err) {
+    console.error(err);
+    plannedLabel.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
+  }
+});
+
+document.getElementById('addTeam').addEventListener('click', addTeam);
+
+// Surface any uncaught errors in the sidebar so failures aren't silent.
+window.addEventListener('error', e => {
+  console.error('Uncaught error:', e.error || e.message);
+});
+
+// Bootstrap: show empty leaderboard + start with one empty team
+renderLeaderboard();
+addTeam();
+</script>
+</body>
+</html>
