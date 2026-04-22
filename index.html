@@ -125,6 +125,152 @@
   }
   button.primary:hover { background: #0b5ed7; }
 
+  button.secondary {
+    width: 100%;
+    padding: 10px;
+    margin-top: 8px;
+    background: white;
+    color: #0d6efd;
+    border: 1px solid #0d6efd;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button.secondary:hover { background: #eef5ff; }
+  button.secondary:disabled {
+    color: #adb5bd;
+    border-color: #dee2e6;
+    background: #f8f9fa;
+    cursor: not-allowed;
+  }
+
+  #printReport { display: none; }
+
+  body.preparing-print > *:not(#printReport):not(.print-overlay) { display: none !important; }
+  body.preparing-print #printReport {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: white;
+    overflow: auto;
+    padding: 15mm 12mm;
+    z-index: 50000;
+  }
+  .print-overlay {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #212529;
+    color: white;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    z-index: 60000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+
+  .print-page {
+    page-break-after: always;
+    break-after: page;
+    width: 186mm;
+    margin: 0 auto 10mm;
+    display: flex;
+    flex-direction: column;
+    gap: 6mm;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: #212529;
+    box-sizing: border-box;
+  }
+  .print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  .print-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 2px solid #212529;
+    padding-bottom: 6mm;
+  }
+  .print-color-swatch {
+    width: 18pt; height: 18pt; border-radius: 3pt; flex-shrink: 0;
+  }
+  .print-title {
+    font-size: 20pt;
+    font-weight: 700;
+    flex: 1;
+    margin: 0;
+  }
+  .print-subtitle {
+    font-size: 10pt;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 1pt;
+  }
+  .print-mapcontainer {
+    width: 100%;
+    height: 100mm;
+    border: 1px solid #dee2e6;
+    border-radius: 2pt;
+    overflow: hidden;
+  }
+  .print-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3mm 10mm;
+    font-size: 11pt;
+  }
+  .print-stats-grid .info-row {
+    display: grid !important;
+    grid-template-columns: 1fr auto;
+    gap: 8pt;
+    border-bottom: 1px dotted #dee2e6;
+    padding: 2pt 0;
+    break-inside: avoid;
+  }
+  .print-stats-grid .info-row > span:first-child { color: #6c757d; }
+  .print-stats-grid .info-row > strong { color: #212529; }
+  .print-stats-grid .medal {
+    font-size: 9pt;
+    padding: 2pt 7pt;
+    cursor: default;
+  }
+  .print-medal-row strong { display: flex; justify-content: flex-end; }
+  .print-section-heading {
+    font-size: 10pt;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.5pt;
+    margin: 2mm 0 1mm;
+    font-weight: 600;
+  }
+  .print-profile-wrap .profile { height: 30mm; }
+  .print-footer {
+    margin-top: auto;
+    padding-top: 4mm;
+    border-top: 1px solid #dee2e6;
+    font-size: 8pt;
+    color: #868e96;
+    text-align: center;
+  }
+  .print-footer .heart { animation: none; }
+
+  @media print {
+    @page { size: A4 portrait; margin: 12mm 10mm; }
+    body > *:not(#printReport) { display: none !important; }
+    #printReport {
+      display: block !important;
+      position: static;
+      padding: 0;
+      background: white;
+    }
+    .print-page { margin: 0; page-break-after: always; }
+    .print-page:last-child { page-break-after: auto; }
+    .print-overlay { display: none !important; }
+  }
+
   .badge {
     display: inline-block;
     padding: 2px 6px;
@@ -295,6 +441,106 @@
     font-weight: 500;
   }
 
+  .about-ctrl-btn {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 1px solid #dee2e6;
+    border-radius: 999px;
+    background: white;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    color: #3c4043;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  }
+  .about-ctrl-btn:hover { background: #f8f9fa; color: #1a73e8; }
+  .about-ctrl-btn::before {
+    content: 'ⓘ';
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: modal-fade 0.15s ease-out;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  @keyframes modal-fade {
+    from { opacity: 0; } to { opacity: 1; }
+  }
+  .modal-card {
+    background: white;
+    padding: 28px 32px 24px;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    max-width: 400px;
+    width: calc(100% - 32px);
+    position: relative;
+  }
+  .modal-card h3 {
+    margin: 0 0 6px;
+    font-size: 18px;
+    color: #212529;
+  }
+  .modal-lead {
+    font-size: 13px;
+    color: #6c757d;
+    margin: 0 0 12px;
+  }
+  .modal-love {
+    font-size: 14px;
+    color: #495057;
+    margin: 0 0 14px;
+  }
+  .heart {
+    color: #e63946;
+    font-size: 16px;
+    vertical-align: -1px;
+    display: inline-block;
+    animation: heart-beat 1.6s ease-in-out infinite;
+  }
+  @keyframes heart-beat {
+    0%, 60%, 100% { transform: scale(1); }
+    30% { transform: scale(1.2); }
+  }
+  .modal-contact {
+    font-size: 14px;
+    line-height: 1.7;
+    color: #212529;
+  }
+  .modal-contact a {
+    color: #0d6efd;
+    text-decoration: none;
+  }
+  .modal-contact a:hover { text-decoration: underline; }
+  .modal-close {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    border: none;
+    background: transparent;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    color: #adb5bd;
+    padding: 4px 8px;
+  }
+  .modal-close:hover { color: #212529; }
+
   .basemap-switcher {
     display: flex;
     gap: 6px;
@@ -438,6 +684,7 @@
     <h2>Teams</h2>
     <div id="teams"></div>
     <button class="primary" id="addTeam">+ Add Team</button>
+    <button class="secondary" id="exportPdf">Export PDF</button>
   </div>
   <div id="map"></div>
 
@@ -462,6 +709,24 @@
   </div>
 
   <div id="colorPicker"></div>
+
+  <div id="printReport" aria-hidden="true"></div>
+
+  <div id="aboutModal" class="modal-backdrop" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="aboutClose" aria-label="Close">×</button>
+      <h3>Impressum</h3>
+      <p class="modal-lead">Straight Line Mission Result Plotter</p>
+      <p class="modal-love">
+        Created with <span class="heart" aria-label="love">♥</span> by
+        <strong>Axel Schorcht</strong>
+      </p>
+      <div class="modal-contact">
+        <div><a href="https://axel-schorcht.de" target="_blank" rel="noopener noreferrer">axel-schorcht.de</a></div>
+        <div><a href="mailto:info@axel-schorcht.de">info@axel-schorcht.de</a></div>
+      </div>
+    </div>
+  </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -670,6 +935,13 @@ async function parseFile(file) {
 
 // ---------- Map setup ----------
 const map = L.map('map').setView([51.5, -0.1], 5);
+
+// Leaflet measures the container once at init and does not repaint when the
+// container size changes (e.g. preview-panel resize). Watch the container and
+// invalidate on any size change so tiles always fill the visible area.
+const mapEl = document.getElementById('map');
+new ResizeObserver(() => map.invalidateSize()).observe(mapEl);
+setTimeout(() => map.invalidateSize(), 0);
 // CartoDB Voyager — OSM-based tiles that work from file:// origins
 // (osm.org blocks file:// via their tile usage policy).
 const streetLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
@@ -734,6 +1006,30 @@ legend.onAdd = () => {
   return div;
 };
 legend.addTo(map);
+
+// Floating About button anchored to the map's bottom-center.
+{
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'about-ctrl-btn';
+  btn.textContent = 'About';
+  L.DomEvent.disableClickPropagation(btn);
+  L.DomEvent.disableScrollPropagation(btn);
+  btn.addEventListener('click', () => {
+    document.getElementById('aboutModal').hidden = false;
+  });
+  document.getElementById('map').appendChild(btn);
+}
+
+{
+  const modal = document.getElementById('aboutModal');
+  const closeModal = () => { modal.hidden = true; };
+  document.getElementById('aboutClose').addEventListener('click', closeModal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !modal.hidden) closeModal();
+  });
+}
 
 // ---------- State ----------
 let plannedLine = null;
@@ -1191,6 +1487,153 @@ enableDrop(plannedDrop, plannedInput, async file => {
 });
 
 document.getElementById('addTeam').addEventListener('click', addTeam);
+
+// ============================================================================
+// PDF export — builds a dedicated print report with one A4 page per team
+// (name, medal, stats, map, elevation profile) and triggers window.print().
+// ============================================================================
+async function exportPdfReport() {
+  if (!plannedLine || plannedLine.length < 2) {
+    alert('Please load the planned line first.');
+    return;
+  }
+  const eligible = [...teams.values()].filter(t => t.stats && t.points.length > 0);
+  if (eligible.length === 0) {
+    alert('Load at least one team track (with the planned line) before exporting.');
+    return;
+  }
+
+  const report = document.getElementById('printReport');
+  report.innerHTML = '';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'print-overlay';
+  overlay.textContent = 'Preparing PDF — loading map tiles…';
+  document.body.appendChild(overlay);
+
+  document.body.classList.add('preparing-print');
+
+  const mapInstances = [];
+  const tileLoadPromises = [];
+
+  eligible.forEach((team, idx) => {
+    const rank = [...teams.values()]
+      .filter(t => t.stats)
+      .sort((a, b) => a.stats.maxDeviation - b.stats.maxDeviation)
+      .findIndex(t => t.id === team.id) + 1;
+    const medal = computeMedal(team.stats.maxDeviation);
+    const ele = elevationStats(team.points);
+    const plannedEle = elevationStats(plannedLine);
+
+    const page = document.createElement('section');
+    page.className = 'print-page';
+    page.innerHTML = `
+      <header class="print-header">
+        <div class="print-color-swatch" style="background:${team.color}"></div>
+        <div style="flex:1">
+          <h2 class="print-title">${escapeHtml(team.name)}</h2>
+          <div class="print-subtitle">Straight Line Mission · Rank ${rank} of ${eligible.length}</div>
+        </div>
+      </header>
+
+      <div class="print-mapcontainer" id="printMap_${team.id}"></div>
+
+      <div class="print-section-heading">Team Result</div>
+      <div class="print-stats-grid">
+        <div class="info-row"><span>Max deviation</span><strong>${team.stats.maxDeviation.toFixed(1)} m</strong></div>
+        <div class="info-row print-medal-row"><span>Medal</span><strong><span class="medal ${medal.className}">${medal.name}</span></strong></div>
+        <div class="info-row"><span>Distance walked</span><strong>${(team.stats.totalLength / 1000).toFixed(2)} km</strong></div>
+        <div class="info-row"><span>Track points</span><strong>${team.points.length.toLocaleString()}</strong></div>
+        ${ele ? `
+          <div class="info-row"><span>Elevation range</span><strong>${ele.min.toFixed(0)} – ${ele.max.toFixed(0)} m</strong></div>
+          <div class="info-row"><span>Total ascent</span><strong>+${ele.ascent.toFixed(0)} m</strong></div>
+          <div class="info-row"><span>Total descent</span><strong>−${ele.descent.toFixed(0)} m</strong></div>
+        ` : ''}
+      </div>
+
+      <div class="print-section-heading">Planned Line</div>
+      <div class="print-stats-grid">
+        <div class="info-row"><span>Straight-line distance</span><strong>${(haversine(plannedLine[0], plannedLine[plannedLine.length - 1]) / 1000).toFixed(3)} km</strong></div>
+        <div class="info-row"><span>Waypoints</span><strong>${plannedLine.length.toLocaleString()}</strong></div>
+        <div class="info-row"><span>Start</span><strong>${formatCoord(plannedLine[0].lat, plannedLine[0].lon)}</strong></div>
+        <div class="info-row"><span>End</span><strong>${formatCoord(plannedLine[plannedLine.length - 1].lat, plannedLine[plannedLine.length - 1].lon)}</strong></div>
+        ${plannedEle ? `
+          <div class="info-row"><span>Elevation range</span><strong>${plannedEle.min.toFixed(0)} – ${plannedEle.max.toFixed(0)} m</strong></div>
+          <div class="info-row"><span>Planned ascent</span><strong>+${plannedEle.ascent.toFixed(0)} m</strong></div>
+        ` : ''}
+      </div>
+
+      <div class="print-section-heading">Elevation Profile</div>
+      <div class="print-profile-wrap">${buildElevationProfile(team.points, team.color) || '<em style="color:#adb5bd;font-size:10pt">No elevation data.</em>'}</div>
+
+      <div class="print-footer">
+        Created with <span class="heart">♥</span> by Axel Schorcht · axel-schorcht.de
+      </div>
+    `;
+    report.appendChild(page);
+
+    const mapEl = page.querySelector('#printMap_' + team.id);
+    const m = L.map(mapEl, {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      keyboard: false,
+    }).setView([0, 0], 2);
+    const tl = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(m);
+
+    L.polyline(plannedLine.map(p => [p.lat, p.lon]), {
+      color: '#000', weight: 3, opacity: 0.9, dashArray: '8,5'
+    }).addTo(m);
+    L.polyline(team.points.map(p => [p.lat, p.lon]), {
+      color: team.color, weight: 3, opacity: 0.9
+    }).addTo(m);
+    const dp = team.stats.maxDeviationPoint;
+    const df = team.stats.maxDeviationFoot;
+    L.polyline([[dp.lat, dp.lon], [df.lat, df.lon]], {
+      color: team.color, weight: 2, dashArray: '3,4', opacity: 0.85
+    }).addTo(m);
+    L.circleMarker([dp.lat, dp.lon], {
+      radius: 6, color: '#fff', weight: 2, fillColor: team.color, fillOpacity: 1
+    }).addTo(m);
+
+    const bounds = L.latLngBounds(plannedLine.map(p => [p.lat, p.lon]));
+    team.points.forEach(pt => bounds.extend([pt.lat, pt.lon]));
+    m.fitBounds(bounds, { padding: [12, 12] });
+
+    mapInstances.push(m);
+    tileLoadPromises.push(new Promise(resolve => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      tl.once('load', done);
+      setTimeout(done, 4000);
+    }));
+  });
+
+  await new Promise(r => setTimeout(r, 50));
+  mapInstances.forEach(m => m.invalidateSize());
+
+  await Promise.all(tileLoadPromises);
+  await new Promise(r => setTimeout(r, 300));
+
+  const cleanup = () => {
+    window.removeEventListener('afterprint', cleanup);
+    document.body.classList.remove('preparing-print');
+    overlay.remove();
+    mapInstances.forEach(m => m.remove());
+    report.innerHTML = '';
+  };
+  window.addEventListener('afterprint', cleanup);
+
+  window.print();
+  setTimeout(() => { if (document.body.classList.contains('preparing-print')) cleanup(); }, 60000);
+}
+
+document.getElementById('exportPdf').addEventListener('click', exportPdfReport);
 
 // Surface any uncaught errors in the sidebar so failures aren't silent.
 window.addEventListener('error', e => {

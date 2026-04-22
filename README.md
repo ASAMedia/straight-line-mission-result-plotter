@@ -4,6 +4,8 @@ A single-file browser app for visualising and scoring [straight line missions](h
 
 Drop in the planned line and each team's GPS track; the app overlays everything on a map, measures how far each team strayed, and ranks them on a leaderboard.
 
+**Live site:** https://asamedia.github.io/straight-line-mission-result-plotter/
+
 ## Features
 
 - **Planned line** from a GPX file (waypoints, route, or track — all supported)
@@ -17,14 +19,16 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 - **Live leaderboard** (top-right of the map) that ranks teams by max deviation
 - **Elevation profiles** (sparklines) plus ascent / descent / min–max from `<ele>` tags or FIT altitude records
 - **Basemap switcher** with thumbnails — Street (CartoDB Voyager), Topo (OpenTopoMap with contour lines / Isohypsen), and Satellite (Esri World Imagery)
-- Great-circle math (Haversine + cross-track distance), so measurements are correct for long-range missions
+- **PDF export** — one A4 portrait page per team with name, rank, medal, full stats, a map snapshot (planned line + team track + max-deviation marker), and the elevation profile
+- Accurate geometry (local 2D projection pipeline + Douglas–Peucker simplification + spatial grid index), with a Web Worker so stats computation doesn't block the UI
 
 ## Usage
 
-1. Open [`index.html`](index.html) in any modern browser — no build step, no local server required.
+1. Open the [live site](https://asamedia.github.io/straight-line-mission-result-plotter/) — or open [`index.html`](index.html) from a local clone; no build step, no local server required.
 2. Drop the planned-line GPX into the **Planned Straight Line** slot.
 3. Add a team, name it, and drop in the team's `.gpx` or `.fit` recording. Repeat for each team.
 4. The map, leaderboard, and per-team stats update live.
+5. Click **Export PDF** to generate a per-team report. The app spins up a fresh map for each team, waits for tiles to load, then opens the browser's print dialog — pick **Save as PDF** as the destination to get one A4 page per team.
 
 ## File formats
 
