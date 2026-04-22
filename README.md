@@ -6,6 +6,8 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 
 **Live site:** https://asamedia.github.io/straight-line-mission-result-plotter/
 
+![Screenshot](docs/screenshot.png)
+
 ## Features
 
 - **Planned line** from a GPX file (waypoints, route, or track — all supported)
