@@ -1210,6 +1210,15 @@
       <p class="modal-lead">Render the team playback as a 1280×720 WebM video with team-name labels above each marker.</p>
       <div id="videoExportSetup">
         <div class="video-row">
+          <label for="videoStyle">Map style</label>
+          <select id="videoStyle" class="playback-speed-select" style="margin-left:0">
+            <option value="street" selected>Street</option>
+            <option value="topo">Topo (contour lines)</option>
+            <option value="satellite">Satellite</option>
+            <option value="3d">3D terrain</option>
+          </select>
+        </div>
+        <div class="video-row">
           <label for="videoSpeed">Playback speed</label>
           <select id="videoSpeed" class="playback-speed-select" style="margin-left:0">
             <option value="1">1× (real-time)</option>
@@ -2960,6 +2969,52 @@ function closeVideoExportModal() {
   document.getElementById('videoExportModal').hidden = true;
 }
 
+// Build a MapLibre style object for the video render based on the user's
+// basemap choice. 3D adds a raster-dem source + terrain spec.
+function buildVideoStyle(key) {
+  const sources = {};
+  const layers = [
+    { id: 'bg', type: 'background', paint: { 'background-color': '#f8f9fa' } }
+  ];
+  if (key === 'topo') {
+    sources.base = {
+      type: 'raster',
+      tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png',
+              'https://b.tile.opentopomap.org/{z}/{x}/{y}.png',
+              'https://c.tile.opentopomap.org/{z}/{x}/{y}.png'],
+      tileSize: 256, maxzoom: 17
+    };
+  } else if (key === 'satellite' || key === '3d') {
+    sources.base = {
+      type: 'raster',
+      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      tileSize: 256, maxzoom: 19
+    };
+  } else {
+    // street default — CartoDB Voyager
+    sources.base = {
+      type: 'raster',
+      tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+              'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+              'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
+      tileSize: 256, maxzoom: 19
+    };
+  }
+  layers.push({ id: 'base', type: 'raster', source: 'base' });
+
+  const style = { version: 8, sources, layers };
+  if (key === '3d') {
+    style.sources.dem = {
+      type: 'raster-dem',
+      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+      tileSize: 256, maxzoom: 15, encoding: 'terrarium'
+    };
+    style.terrain = { source: 'dem', exaggeration: 1.4 };
+    style.sky = { 'sky-color': '#8bb5d6', 'horizon-color': '#d6e5f0' };
+  }
+  return style;
+}
+
 async function runVideoExport() {
   const speed = Number(document.getElementById('videoSpeed').value) || 1;
   const teamsWithPb = [...teams.values()].map(t => ({ team: t, pb: buildTeamPlayback(t) })).filter(x => x.pb);
@@ -2986,28 +3041,17 @@ async function runVideoExport() {
   // Fresh map each time to avoid stale layers from previous runs.
   if (mapContainer._videoMap) { mapContainer._videoMap.remove(); mapContainer._videoMap = null; }
 
+  const styleKey = document.getElementById('videoStyle').value || 'street';
+  const styleSpec = buildVideoStyle(styleKey);
   const vmap = new maplibregl.Map({
     container: 'videoMap',
     preserveDrawingBuffer: true,
-    style: {
-      version: 8,
-      sources: {
-        base: {
-          type: 'raster',
-          tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-                  'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-                  'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
-          tileSize: 256, maxzoom: 19
-        }
-      },
-      layers: [
-        { id: 'bg', type: 'background', paint: { 'background-color': '#f8f9fa' } },
-        { id: 'base', type: 'raster', source: 'base' }
-      ]
-    },
+    style: styleSpec,
     interactive: false,
     attributionControl: false,
-    fadeDuration: 0
+    fadeDuration: 0,
+    pitch: styleKey === '3d' ? 60 : 0,
+    maxPitch: 85
   });
   mapContainer._videoMap = vmap;
 
