@@ -835,6 +835,36 @@
     width: 0%;
     transition: width 0.1s linear;
   }
+  /* iOS-style toggle switch used in the video export modal. */
+  .video-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .video-switch input { opacity: 0; width: 0; height: 0; }
+  .video-switch-track {
+    position: absolute;
+    inset: 0;
+    background: #ced4da;
+    border-radius: 999px;
+    transition: background 0.15s;
+  }
+  .video-switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: left 0.15s;
+  }
+  .video-switch input:checked + .video-switch-track { background: #0d6efd; }
+  .video-switch input:checked + .video-switch-track .video-switch-thumb { left: 20px; }
   /* Off-screen render area — kept in the layout so WebGL can render,
      but positioned far outside the viewport so the user never sees it. */
   #videoRenderArea {
@@ -1230,6 +1260,13 @@
             <option value="200">200×</option>
             <option value="500">500×</option>
           </select>
+        </div>
+        <div class="video-row">
+          <label for="videoFollowCamera">Camera follows action</label>
+          <label class="video-switch" title="Keep all active team markers in frame as they move">
+            <input type="checkbox" id="videoFollowCamera">
+            <span class="video-switch-track"><span class="video-switch-thumb"></span></span>
+          </label>
         </div>
         <div id="videoDurationEstimate" class="video-hint"></div>
         <button class="primary" id="videoExportStart" style="margin-top:16px">Start recording</button>
@@ -3203,6 +3240,7 @@ async function runVideoExport() {
   setProgress(0.08, 'Recording…');
 
   // Main render loop (real time × speed → advances playback time)
+  const followCamera = document.getElementById('videoFollowCamera').checked;
   const startReal = performance.now();
   let cancelled = false;
   document.getElementById('videoExportClose').onclick = () => { cancelled = true; };
@@ -3212,16 +3250,44 @@ async function runVideoExport() {
       const realElapsed = performance.now() - startReal;
       const playbackMs = Math.min(totalDurationMs, (realElapsed / videoDurationMs) * totalDurationMs);
 
+      // Compute current active team positions
+      const activePositions = [];
+      for (const { team, pb } of teamsWithPb) {
+        if (playbackMs > pb.duration) continue;
+        const pos = teamPositionAt(pb, playbackMs);
+        if (pos) activePositions.push({ team, pos });
+      }
+
+      // Camera follow — keep all active markers in frame by re-fitting bounds.
+      if (followCamera && activePositions.length > 0) {
+        const lngs = activePositions.map(p => p.pos.lon);
+        const lats = activePositions.map(p => p.pos.lat);
+        let minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+        let minLat = Math.min(...lats), maxLat = Math.max(...lats);
+        // Ensure a minimum window size (~400m) so single points don't zoom to max.
+        const minDeg = 0.004;
+        if (maxLng - minLng < minDeg) {
+          const c = (minLng + maxLng) / 2;
+          minLng = c - minDeg / 2; maxLng = c + minDeg / 2;
+        }
+        if (maxLat - minLat < minDeg) {
+          const c = (minLat + maxLat) / 2;
+          minLat = c - minDeg / 2; maxLat = c + minDeg / 2;
+        }
+        const cam = vmap.cameraForBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 120 });
+        if (cam) {
+          // easeTo with small duration keeps motion smooth rather than jittery.
+          vmap.easeTo({ center: cam.center, zoom: cam.zoom, duration: 120, essential: true });
+        }
+      }
+
       // Draw MapLibre canvas onto composite canvas
       ctx.fillStyle = '#f8f9fa';
       ctx.fillRect(0, 0, 1280, 720);
       ctx.drawImage(vmap.getCanvas(), 0, 0, 1280, 720);
 
       // Draw all team markers + labels that are currently active
-      for (const { team, pb } of teamsWithPb) {
-        if (playbackMs > pb.duration) continue;
-        const pos = teamPositionAt(pb, playbackMs);
-        if (!pos) continue;
+      for (const { team, pos } of activePositions) {
         const pt = vmap.project([pos.lon, pos.lat]);
         drawLabeledMarker(pt.x, pt.y, team.color, team.name);
       }
