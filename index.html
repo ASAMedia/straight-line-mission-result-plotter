@@ -180,12 +180,14 @@
     break-after: page;
     width: 186mm;
     margin: 0 auto 10mm;
-    display: flex;
-    flex-direction: column;
-    gap: 6mm;
     font-family: system-ui, -apple-system, sans-serif;
     color: #212529;
     box-sizing: border-box;
+  }
+  .print-page-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6mm;
   }
   .print-page:last-child {
     page-break-after: auto;
@@ -264,18 +266,40 @@
   @media print {
     @page { size: A4 portrait; margin: 12mm 10mm; }
     body > *:not(#printReport) { display: none !important; }
-    #printReport {
+    /* !important + explicit reset of every screen-mode positioning prop:
+       the body.preparing-print rules have higher specificity than a bare
+       #printReport selector, so without this the report stays
+       position: fixed while printing and everything collapses onto one page. */
+    #printReport,
+    body.preparing-print #printReport {
       display: block !important;
-      position: static;
-      padding: 0;
-      background: white;
+      position: static !important;
+      inset: auto !important;
+      top: auto !important;
+      left: auto !important;
+      right: auto !important;
+      bottom: auto !important;
+      padding: 0 !important;
+      background: white !important;
+      overflow: visible !important;
+      z-index: auto !important;
+      width: auto !important;
+      height: auto !important;
     }
     .print-page {
       margin: 0;
       page-break-after: always;
+      break-after: page;
+    }
+    .print-page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+    /* Scale only the inner body so page-break calculations on .print-page
+       aren't disturbed by the zoom transform. */
+    .print-page-body {
       zoom: 0.85;
     }
-    .print-page:last-child { page-break-after: auto; }
     .print-overlay { display: none !important; }
   }
 
@@ -1608,6 +1632,7 @@ async function exportPdfReport() {
     const page = document.createElement('section');
     page.className = 'print-page';
     page.innerHTML = `
+      <div class="print-page-body">
       <header class="print-header">
         <div class="print-color-swatch" style="background:${team.color}"></div>
         <div style="flex:1">
@@ -1648,6 +1673,7 @@ async function exportPdfReport() {
 
       <div class="print-footer">
         Created with <span class="heart">♥</span> by Axel Schorcht · axel-schorcht.de
+      </div>
       </div>
     `;
     report.appendChild(page);
