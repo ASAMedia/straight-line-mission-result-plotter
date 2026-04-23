@@ -19,7 +19,7 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 
 ## Features
 
-- **Planned line** from a GPX file (waypoints, route, or track — all supported)
+- **Planned line** from a GPX file (waypoints, route, or track — all supported) **or drawn directly on the map** (click a start point, click an end point); the result can be exported back out as a standards-compliant GPX file
 - **Multiple teams** with per-team GPX **or** Garmin FIT tracks
 - **Max deviation** per team, shown as a marker with a dashed perpendicular to the closest point on the planned line
 - **Medal awards** based on max deviation:
@@ -40,7 +40,7 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 
 1. Open the [live site](https://asamedia.github.io/straight-line-mission-result-plotter/) — or open [`index.html`](index.html) from a local clone; no build step, no local server required.
 2. *(Optional)* click **▶ Try with demo data** at the top of the sidebar to load a sample planned line and two simulated teams — the fastest way to see everything in action.
-3. Drop your own planned-line GPX into the **Planned Straight Line** slot.
+3. Drop your own planned-line GPX into the **Planned Straight Line** slot — or click **or draw a line on the map →** and tap the start/end points directly on the map. Once a line exists, the info card offers an **⤓ Export as GPX** button to download it.
 4. Add a team, name it, and drop in the team's `.gpx` or `.fit` recording. Repeat for each team.
 5. The map, leaderboard, and per-team stats update live.
 6. If your team tracks carry timestamps, a **Live Playback** bar appears at the top of the map — press play to animate every team along its track at your chosen speed.
