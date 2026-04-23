@@ -809,6 +809,22 @@
   }
 
   /* ============================================================
+     Narrow desktop / tablet (sidebar still beside map, but the map is
+     too narrow for playback bar and leaderboard to fit side by side).
+     Stack them vertically inside the map.
+     ============================================================ */
+  @media (min-width: 769px) and (max-width: 1199px) {
+    .playback-wrap {
+      left: 56px;
+      right: 16px;
+    }
+    .leaderboard-panel {
+      top: 84px;
+      width: 280px;
+    }
+  }
+
+  /* ============================================================
      Mobile layout
      ============================================================ */
   @media (max-width: 768px) {
