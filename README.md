@@ -6,7 +6,11 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 
 **Live site:** https://asamedia.github.io/straight-line-mission-result-plotter/
 
-![Screenshot](docs/screenshot.png)
+![Desktop screenshot](docs/screenshot-desktop.png)
+
+<p align="center">
+  <img src="docs/screenshot-mobile.png" alt="Mobile screenshot" width="320">
+</p>
 
 ## Features
 
