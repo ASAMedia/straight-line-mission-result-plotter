@@ -827,11 +827,13 @@
     }
 
     /* Shrink the leaderboard panel and stack it below the playback bar
-       instead of next to it, so both have full usable width. */
+       instead of next to it, so both have full usable width.
+       Playback bar is ~61px tall at top: 12px → ends at y=73, so 84px
+       leaves clear space below it. */
     .leaderboard-panel {
       width: 220px;
       max-width: calc(100% - 24px);
-      top: 70px;
+      top: 84px;
       right: 12px;
     }
     .leaderboard-panel .panel-header {
