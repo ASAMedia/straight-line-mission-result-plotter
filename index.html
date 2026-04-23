@@ -731,6 +731,43 @@
   .basemap-option.active .basemap-label {
     color: #1a73e8;
   }
+  /* Visual hint that 3D is a different kind of option */
+  .basemap-thumb-3d { position: relative; }
+  .basemap-thumb-3d::after {
+    content: '3D';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+  }
+
+  /* 3D map overlay — sits on top of Leaflet inside #map.
+     When .map-3d-active is applied on #map, Leaflet's visual layers hide
+     (tile/overlay/marker/shadow panes) while its controls (zoom buttons,
+     attribution) and our own UI (leaderboard, playback bar, switcher, etc.)
+     stay visible on top of the MapLibre canvas. */
+  #map3d {
+    position: absolute;
+    inset: 0;
+    display: none;
+    z-index: 250;
+  }
+  #map.map-3d-active #map3d { display: block; }
+  #map.map-3d-active .leaflet-tile-pane,
+  #map.map-3d-active .leaflet-overlay-pane,
+  #map.map-3d-active .leaflet-marker-pane,
+  #map.map-3d-active .leaflet-shadow-pane { display: none; }
+  /* MapLibre canvas should never be clipped to a child of Leaflet's panes. */
+  #map3d canvas { outline: none; }
+  .maplibregl-marker { cursor: default; }
 
   .leaderboard-panel {
     position: absolute;
@@ -931,6 +968,10 @@
     <button class="basemap-option" data-layer="satellite" type="button">
       <div class="basemap-thumb" style="background-image: url('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/10/361/534')"></div>
       <div class="basemap-label">Satellite</div>
+    </button>
+    <button class="basemap-option" data-layer="3d" type="button" title="3D terrain view (loads on first click)">
+      <div class="basemap-thumb basemap-thumb-3d" style="background-image: url('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/10/361/534')"></div>
+      <div class="basemap-label">3D</div>
     </button>
   </div>
 
@@ -1287,14 +1328,209 @@ new BasemapSwitcherControl().addTo(map);
 
 const basemapLayers = { street: streetLayer, topo: topoLayer, satellite: satelliteLayer };
 let currentBasemap = 'street';
+
+// ---------- 3D map (MapLibre, lazy-loaded) ----------
+let maplibregl = null;
+let map3d = null;
+let map3dReady = false;
+const map3dMarkers = new Map(); // teamId -> maplibre Marker for playback
+const map3dMaxDevMarkers = new Map(); // teamId -> maplibre Marker for max-deviation point
+
+async function loadMapLibre() {
+  if (maplibregl) return maplibregl;
+  if (!document.querySelector('link[data-maplibre]')) {
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+    l.dataset.maplibre = '1';
+    document.head.appendChild(l);
+  }
+  const mod = await import('https://esm.sh/maplibre-gl@4.7.1');
+  maplibregl = mod.default || mod;
+  return maplibregl;
+}
+
+async function init3D() {
+  await loadMapLibre();
+  let container = document.getElementById('map3d');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'map3d';
+    document.getElementById('map').appendChild(container);
+  }
+  const c = map.getCenter();
+  map3d = new maplibregl.Map({
+    container: 'map3d',
+    style: {
+      version: 8,
+      sources: {
+        'sat': {
+          type: 'raster',
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: 'Tiles © Esri · terrain: AWS Terrain Tiles'
+        },
+        'dem': {
+          type: 'raster-dem',
+          tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          maxzoom: 15,
+          encoding: 'terrarium'
+        }
+      },
+      layers: [
+        { id: 'bg', type: 'background', paint: { 'background-color': '#a2c0de' } },
+        { id: 'sat', type: 'raster', source: 'sat' }
+      ],
+      terrain: { source: 'dem', exaggeration: 1.4 },
+      sky: { 'sky-color': '#8bb5d6', 'horizon-color': '#d6e5f0' }
+    },
+    center: [c.lng, c.lat],
+    zoom: Math.max(1, map.getZoom() - 1),
+    pitch: 60,
+    bearing: 0,
+    maxPitch: 85,
+    attributionControl: false
+  });
+  map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+  map3d.addControl(new maplibregl.AttributionControl({ compact: true }));
+
+  map3d.on('load', () => {
+    map3dReady = true;
+    sync3DData();
+  });
+}
+
+function sync3DData() {
+  if (!map3d || !map3dReady) return;
+
+  // Planned line
+  if (plannedLine && plannedLine.length >= 2) {
+    const gj = {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: plannedLine.map(p => [p.lon, p.lat]) }
+    };
+    if (map3d.getSource('planned-line')) {
+      map3d.getSource('planned-line').setData(gj);
+    } else {
+      map3d.addSource('planned-line', { type: 'geojson', data: gj });
+      map3d.addLayer({
+        id: 'planned-line', type: 'line', source: 'planned-line',
+        paint: { 'line-color': '#ffffff', 'line-width': 3, 'line-dasharray': [2, 2], 'line-opacity': 0.95 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' }
+      });
+      map3d.addLayer({
+        id: 'planned-line-halo', type: 'line', source: 'planned-line',
+        paint: { 'line-color': '#000', 'line-width': 5, 'line-opacity': 0.6 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' }
+      }, 'planned-line');
+    }
+  }
+
+  // Team tracks
+  for (const team of teams.values()) {
+    const srcId = `team-${team.id}`;
+    const lyrId = `team-${team.id}`;
+    if (team.points.length < 1) continue;
+    const gj = {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: team.points.map(p => [p.lon, p.lat]) }
+    };
+    if (map3d.getSource(srcId)) {
+      map3d.getSource(srcId).setData(gj);
+      map3d.setPaintProperty(lyrId, 'line-color', team.color);
+    } else {
+      map3d.addSource(srcId, { type: 'geojson', data: gj });
+      map3d.addLayer({
+        id: lyrId, type: 'line', source: srcId,
+        paint: { 'line-color': team.color, 'line-width': 4, 'line-opacity': 0.95 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' }
+      });
+    }
+    // Max-deviation marker
+    if (team.stats && team.stats.maxDeviationPoint) {
+      const p = team.stats.maxDeviationPoint;
+      let m = map3dMaxDevMarkers.get(team.id);
+      if (!m) {
+        const el = document.createElement('div');
+        el.style.cssText = `width:14px;height:14px;border-radius:50%;background:${team.color};border:2px solid #fff;box-shadow:0 2px 4px rgba(0,0,0,0.4);`;
+        m = new maplibregl.Marker({ element: el }).setLngLat([p.lon, p.lat])
+          .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(`<b>${team.name}</b><br>Max dev: ${team.stats.maxDeviation.toFixed(1)} m`))
+          .addTo(map3d);
+        map3dMaxDevMarkers.set(team.id, m);
+      } else {
+        m.setLngLat([p.lon, p.lat]);
+      }
+    }
+  }
+
+  // Clean up stale team layers (removed teams)
+  if (map3d.getStyle() && map3d.getStyle().layers) {
+    for (const layer of map3d.getStyle().layers) {
+      if (!layer.id.startsWith('team-')) continue;
+      const teamId = Number(layer.id.replace('team-', ''));
+      if (!teams.has(teamId)) {
+        if (map3d.getLayer(layer.id)) map3d.removeLayer(layer.id);
+        if (map3d.getSource(layer.id)) map3d.removeSource(layer.id);
+        const maxMarker = map3dMaxDevMarkers.get(teamId);
+        if (maxMarker) { maxMarker.remove(); map3dMaxDevMarkers.delete(teamId); }
+      }
+    }
+  }
+
+  // Fit bounds
+  const coords = [];
+  if (plannedLine) plannedLine.forEach(p => coords.push([p.lon, p.lat]));
+  teams.forEach(t => t.points.forEach(p => coords.push([p.lon, p.lat])));
+  if (coords.length >= 2) {
+    const lngs = coords.map(c => c[0]);
+    const lats = coords.map(c => c[1]);
+    const bounds = [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]];
+    map3d.fitBounds(bounds, { padding: 80, pitch: 60, duration: 800 });
+  }
+}
+
+function enter3DMode() {
+  document.getElementById('map').classList.add('map-3d-active');
+  if (!map3d) {
+    init3D().catch(err => {
+      console.error('Failed to load 3D view:', err);
+      alert('Could not load the 3D map. Check your internet connection.');
+      document.getElementById('map').classList.remove('map-3d-active');
+    });
+  } else {
+    map3d.resize();
+    sync3DData();
+  }
+}
+
+function exit3DMode() {
+  document.getElementById('map').classList.remove('map-3d-active');
+  // Clear playback markers from 3D so they don't stay behind
+  for (const m of map3dMarkers.values()) m.remove();
+  map3dMarkers.clear();
+}
+
 document.querySelectorAll('.basemap-option').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.layer;
     if (key === currentBasemap) return;
-    map.removeLayer(basemapLayers[currentBasemap]);
-    basemapLayers[key].addTo(map);
     document.querySelector('.basemap-option.active')?.classList.remove('active');
     btn.classList.add('active');
+
+    if (key === '3d') {
+      enter3DMode();
+    } else {
+      if (currentBasemap === '3d') {
+        exit3DMode();
+        // Make sure a Leaflet tile layer is attached
+        if (!map.hasLayer(basemapLayers[key])) basemapLayers[key].addTo(map);
+      } else {
+        map.removeLayer(basemapLayers[currentBasemap]);
+        basemapLayers[key].addTo(map);
+      }
+    }
     currentBasemap = key;
   });
 });
@@ -1686,10 +1922,13 @@ function renderTeam(team) {
     clearTeamLayers(team);
     const marker = playback.markers.get(team.id);
     if (marker) { map.removeLayer(marker); playback.markers.delete(team.id); }
+    const marker3d = map3dMarkers.get(team.id);
+    if (marker3d) { marker3d.remove(); map3dMarkers.delete(team.id); }
     teams.delete(team.id);
     el.remove();
     renderLeaderboard();
     updatePlaybackVisibility();
+    sync3DData();
   });
 
   const drop = el.querySelector('.drop');
@@ -1717,6 +1956,7 @@ function renderTeam(team) {
       renderTeamStats(team);
       renderLeaderboard();
       updatePlaybackVisibility();
+      sync3DData();
       fitMap();
     } catch (err) {
       console.error(err);
@@ -1796,6 +2036,7 @@ enableDrop(plannedDrop, plannedInput, async file => {
       renderTeamStats(team);
     }
     renderLeaderboard();
+    sync3DData();
     fitMap();
   } catch (err) {
     console.error(err);
@@ -1892,15 +2133,16 @@ function clearPlaybackMarkers() {
 }
 
 function updatePlaybackMarkers() {
+  const is3D = currentBasemap === '3d' && map3d && map3dReady;
   for (const team of teams.values()) {
     const pb = team.playbackData;
     const pos = teamPositionAt(pb, playback.currentMs);
+
+    // 2D Leaflet marker
     let marker = playback.markers.get(team.id);
     if (!pos) {
       if (marker) { map.removeLayer(marker); playback.markers.delete(team.id); }
-      continue;
-    }
-    if (!marker) {
+    } else if (!marker) {
       marker = L.circleMarker([pos.lat, pos.lon], {
         radius: 8, color: '#fff', weight: 2,
         fillColor: team.color, fillOpacity: 1,
@@ -1910,6 +2152,21 @@ function updatePlaybackMarkers() {
       playback.markers.set(team.id, marker);
     } else {
       marker.setLatLng([pos.lat, pos.lon]);
+    }
+
+    // 3D MapLibre marker (mirrors the 2D marker)
+    if (is3D) {
+      let m3d = map3dMarkers.get(team.id);
+      if (!pos) {
+        if (m3d) { m3d.remove(); map3dMarkers.delete(team.id); }
+      } else if (!m3d) {
+        const el = document.createElement('div');
+        el.style.cssText = `width:16px;height:16px;border-radius:50%;background:${team.color};border:2px solid #fff;box-shadow:0 2px 4px rgba(0,0,0,0.4);`;
+        m3d = new maplibregl.Marker({ element: el }).setLngLat([pos.lon, pos.lat]).addTo(map3d);
+        map3dMarkers.set(team.id, m3d);
+      } else {
+        m3d.setLngLat([pos.lon, pos.lat]);
+      }
     }
   }
 }
