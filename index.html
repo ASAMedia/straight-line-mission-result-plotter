@@ -83,12 +83,16 @@
   }
   .team-name {
     flex: 1;
+    min-width: 0;
     border: 1px solid transparent;
     font-weight: 500;
     font-size: 14px;
     background: transparent;
     padding: 4px 6px;
     border-radius: 4px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
   }
   .team-name:focus, .team-name:hover { border-color: #dee2e6; background: #f8f9fa; outline: none; }
   .team-remove {
@@ -1432,7 +1436,8 @@ function renderTeam(team) {
     openColorPicker(swatch, team);
   });
 
-  el.querySelector('.team-name').addEventListener('input', e => {
+  const nameInput = el.querySelector('.team-name');
+  nameInput.addEventListener('input', e => {
     team.name = e.target.value || `Team ${team.id}`;
     if (team.layer) team.layer.bindTooltip(team.name, { sticky: true });
     if (team.marker) {
@@ -1463,6 +1468,14 @@ function renderTeam(team) {
         return;
       }
       label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${team.points.length.toLocaleString()} pts</span>`;
+      // Append the uploaded filename to the team name, replacing any previous
+      // " - filename" suffix from an earlier upload so a re-upload stays clean.
+      const baseName = team.name.includes(' - ')
+        ? team.name.substring(0, team.name.lastIndexOf(' - '))
+        : team.name;
+      team.name = `${baseName} - ${file.name}`;
+      nameInput.value = team.name;
+      nameInput.title = team.name;
       computeTeamStats(team);
       drawTeam(team);
       renderTeamStats(team);
