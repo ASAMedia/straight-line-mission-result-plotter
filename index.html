@@ -826,11 +826,12 @@
       min-height: 0;
     }
 
-    /* Shrink the leaderboard panel so it doesn't cover the small map. */
+    /* Shrink the leaderboard panel and stack it below the playback bar
+       instead of next to it, so both have full usable width. */
     .leaderboard-panel {
       width: 220px;
       max-width: calc(100% - 24px);
-      top: 12px;
+      top: 70px;
       right: 12px;
     }
     .leaderboard-panel .panel-header {
@@ -846,11 +847,12 @@
     .leaderboard-meta { gap: 4px; }
     .leaderboard-meta .medal { padding: 2px 5px; font-size: 9px; }
 
-    /* Playback bar: smaller offsets so it fits next to a narrower leaderboard. */
+    /* Playback bar: full width below the zoom buttons; leaderboard is
+       stacked below it on mobile so there's no horizontal conflict. */
     .playback-wrap {
       top: 12px;
       left: 48px;
-      right: 244px;
+      right: 12px;
     }
 
     /* Touch-friendlier sidebar controls. */
@@ -875,7 +877,6 @@
   @media (max-width: 480px) {
     #sidebar { max-height: 40vh; padding: 12px; }
     .leaderboard-panel { width: 180px; }
-    .playback-wrap { right: 204px; }
     .basemap-thumb { width: 42px; height: 42px; }
     .basemap-option { width: 50px; }
   }
