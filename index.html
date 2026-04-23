@@ -681,6 +681,52 @@
   }
   .modal-close:hover { color: #212529; }
 
+  /* Video export modal helpers */
+  .video-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+  .video-row label { color: #495057; font-weight: 500; min-width: 110px; }
+  .video-hint {
+    font-size: 12px;
+    color: #6c757d;
+    margin-top: 6px;
+  }
+  .video-progress-label {
+    font-size: 13px;
+    color: #212529;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .video-progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .video-progress-bar > div {
+    height: 100%;
+    background: #0d6efd;
+    width: 0%;
+    transition: width 0.1s linear;
+  }
+  /* Off-screen render area — kept in the layout so WebGL can render,
+     but positioned far outside the viewport so the user never sees it. */
+  #videoRenderArea {
+    position: fixed;
+    left: -10000px;
+    top: 0;
+    width: 1280px;
+    height: 720px;
+    pointer-events: none;
+  }
+  #videoMap { width: 1280px; height: 720px; }
+  #videoCanvas { width: 1280px; height: 720px; display: block; }
+
   .basemap-switcher {
     display: flex;
     gap: 6px;
@@ -979,6 +1025,7 @@
     <div id="teams"></div>
     <button class="primary" id="addTeam">+ Add Team</button>
     <button class="secondary" id="exportPdf">Export PDF</button>
+    <button class="secondary" id="exportVideo">Export Video</button>
   </div>
   <div id="map"></div>
 
@@ -1028,6 +1075,40 @@
   </div>
 
   <div id="printReport" aria-hidden="true"></div>
+
+  <div id="videoExportModal" class="modal-backdrop" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="videoExportClose" aria-label="Close">×</button>
+      <h3>Export Playback Video</h3>
+      <p class="modal-lead">Render the team playback as a 1280×720 WebM video with team-name labels above each marker.</p>
+      <div id="videoExportSetup">
+        <div class="video-row">
+          <label for="videoSpeed">Playback speed</label>
+          <select id="videoSpeed" class="playback-speed-select" style="margin-left:0">
+            <option value="1">1× (real-time)</option>
+            <option value="5">5×</option>
+            <option value="10" selected>10×</option>
+            <option value="20">20×</option>
+            <option value="50">50×</option>
+            <option value="100">100×</option>
+          </select>
+        </div>
+        <div id="videoDurationEstimate" class="video-hint"></div>
+        <button class="primary" id="videoExportStart" style="margin-top:16px">Start recording</button>
+      </div>
+      <div id="videoExportProgress" hidden>
+        <div class="video-progress-label" id="videoProgressText">Preparing…</div>
+        <div class="video-progress-bar"><div id="videoProgressFill"></div></div>
+        <div class="video-hint" style="margin-top:6px">Keep this tab focused — recording is real-time.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Off-screen containers for video rendering. Kept in flow (not display:none) so MapLibre can render. -->
+  <div id="videoRenderArea" aria-hidden="true">
+    <div id="videoMap"></div>
+    <canvas id="videoCanvas" width="1280" height="720"></canvas>
+  </div>
 
   <div id="aboutModal" class="modal-backdrop" hidden>
     <div class="modal-card">
@@ -2445,6 +2526,321 @@ async function exportPdfReport() {
 }
 
 document.getElementById('exportPdf').addEventListener('click', exportPdfReport);
+
+// ============================================================================
+// Video export — records the playback animation as a 720p WebM video using
+// an off-screen MapLibre map + 2D canvas composite + MediaRecorder.
+// ============================================================================
+
+function formatSeconds(s) {
+  s = Math.round(s);
+  const m = Math.floor(s / 60), r = s % 60;
+  return m > 0 ? `${m}m ${String(r).padStart(2, '0')}s` : `${r}s`;
+}
+
+function updateVideoDurationEstimate() {
+  const speed = Number(document.getElementById('videoSpeed').value) || 1;
+  const teamsWithTimes = [...teams.values()]
+    .map(t => buildTeamPlayback(t))
+    .filter(Boolean);
+  const dur = teamsWithTimes.reduce((m, t) => Math.max(m, t.duration), 0);
+  const el = document.getElementById('videoDurationEstimate');
+  if (dur === 0) {
+    el.textContent = 'No team tracks with timestamps — load timestamped GPX or FIT files first.';
+    document.getElementById('videoExportStart').disabled = true;
+    return;
+  }
+  const outSec = (dur / 1000) / speed;
+  el.textContent = `Playback duration: ${formatSeconds(dur / 1000)} · At ${speed}× the video will be ≈ ${formatSeconds(outSec)}.`;
+  document.getElementById('videoExportStart').disabled = false;
+}
+
+function openVideoExportModal() {
+  const m = document.getElementById('videoExportModal');
+  document.getElementById('videoExportSetup').hidden = false;
+  document.getElementById('videoExportProgress').hidden = true;
+  document.getElementById('videoProgressFill').style.width = '0%';
+  updateVideoDurationEstimate();
+  m.hidden = false;
+}
+
+function closeVideoExportModal() {
+  document.getElementById('videoExportModal').hidden = true;
+}
+
+async function runVideoExport() {
+  const speed = Number(document.getElementById('videoSpeed').value) || 1;
+  const teamsWithPb = [...teams.values()].map(t => ({ team: t, pb: buildTeamPlayback(t) })).filter(x => x.pb);
+  if (teamsWithPb.length === 0) {
+    alert('No team tracks with timestamps to animate.');
+    return;
+  }
+  const totalDurationMs = teamsWithPb.reduce((m, x) => Math.max(m, x.pb.duration), 0);
+  const videoDurationMs = totalDurationMs / speed;
+
+  // Switch UI to progress view
+  document.getElementById('videoExportSetup').hidden = true;
+  document.getElementById('videoExportProgress').hidden = false;
+  const setProgress = (pct, label) => {
+    document.getElementById('videoProgressFill').style.width = (pct * 100).toFixed(1) + '%';
+    if (label) document.getElementById('videoProgressText').textContent = label;
+  };
+
+  setProgress(0, 'Loading map engine…');
+  await loadMapLibre();
+
+  setProgress(0.02, 'Initialising map…');
+  const mapContainer = document.getElementById('videoMap');
+  // Fresh map each time to avoid stale layers from previous runs.
+  if (mapContainer._videoMap) { mapContainer._videoMap.remove(); mapContainer._videoMap = null; }
+
+  const vmap = new maplibregl.Map({
+    container: 'videoMap',
+    preserveDrawingBuffer: true,
+    style: {
+      version: 8,
+      sources: {
+        base: {
+          type: 'raster',
+          tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                  'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                  'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
+          tileSize: 256, maxzoom: 19
+        }
+      },
+      layers: [
+        { id: 'bg', type: 'background', paint: { 'background-color': '#f8f9fa' } },
+        { id: 'base', type: 'raster', source: 'base' }
+      ]
+    },
+    interactive: false,
+    attributionControl: false,
+    fadeDuration: 0
+  });
+  mapContainer._videoMap = vmap;
+
+  await new Promise(r => vmap.on('load', r));
+
+  // Add planned line + team tracks
+  if (plannedLine && plannedLine.length >= 2) {
+    vmap.addSource('planned', {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: plannedLine.map(p => [p.lon, p.lat]) } }
+    });
+    vmap.addLayer({
+      id: 'planned-halo', type: 'line', source: 'planned',
+      paint: { 'line-color': '#fff', 'line-width': 6, 'line-opacity': 0.9 },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
+    vmap.addLayer({
+      id: 'planned', type: 'line', source: 'planned',
+      paint: { 'line-color': '#000', 'line-width': 3, 'line-dasharray': [2, 2] },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
+  }
+  for (const { team } of teamsWithPb) {
+    vmap.addSource('team-' + team.id, {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: team.points.map(p => [p.lon, p.lat]) } }
+    });
+    vmap.addLayer({
+      id: 'team-' + team.id, type: 'line', source: 'team-' + team.id,
+      paint: { 'line-color': team.color, 'line-width': 3.5, 'line-opacity': 0.95 },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
+  }
+
+  // Fit bounds
+  const allCoords = [];
+  if (plannedLine) plannedLine.forEach(p => allCoords.push([p.lon, p.lat]));
+  teamsWithPb.forEach(({ team }) => team.points.forEach(p => allCoords.push([p.lon, p.lat])));
+  const lngs = allCoords.map(c => c[0]);
+  const lats = allCoords.map(c => c[1]);
+  vmap.jumpTo(vmap.cameraForBounds(
+    [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+    { padding: 80 }
+  ));
+
+  setProgress(0.05, 'Loading map tiles…');
+  await new Promise(r => vmap.once('idle', r));
+
+  // Setup composite canvas
+  const canvas = document.getElementById('videoCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.font = '600 14px system-ui, -apple-system, "Segoe UI", sans-serif';
+
+  function drawLabeledMarker(x, y, color, name) {
+    // Label above marker
+    const text = name;
+    const padX = 7, padY = 4;
+    const metrics = ctx.measureText(text);
+    const tw = metrics.width;
+    const lw = tw + padX * 2;
+    const lh = 22;
+    const lx = Math.round(x - lw / 2);
+    const ly = Math.round(y - 18 - lh);
+    ctx.save();
+    // Drop shadow
+    ctx.shadowColor = 'rgba(0,0,0,0.25)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 1;
+    // Pill background
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    const r = lh / 2;
+    ctx.moveTo(lx + r, ly);
+    ctx.arcTo(lx + lw, ly, lx + lw, ly + lh, r);
+    ctx.arcTo(lx + lw, ly + lh, lx, ly + lh, r);
+    ctx.arcTo(lx, ly + lh, lx, ly, r);
+    ctx.arcTo(lx, ly, lx + lw, ly, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    // Colored border
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(lx + r, ly);
+    ctx.arcTo(lx + lw, ly, lx + lw, ly + lh, r);
+    ctx.arcTo(lx + lw, ly + lh, lx, ly + lh, r);
+    ctx.arcTo(lx, ly + lh, lx, ly, r);
+    ctx.arcTo(lx, ly, lx + lw, ly, r);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+    // Text
+    ctx.fillStyle = '#212529';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, ly + lh / 2 + 1);
+    // Dot
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#fff';
+    ctx.stroke();
+  }
+
+  function drawTimecode(playbackMs) {
+    const s = Math.floor(playbackMs / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const label = h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+      : `${m}:${String(sec).padStart(2, '0')}`;
+    ctx.save();
+    ctx.font = '600 16px system-ui, -apple-system, sans-serif';
+    const padX = 10, padY = 6;
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath();
+    const x = 16, y = 16;
+    const w = tw + padX * 2, h2 = 28;
+    ctx.moveTo(x + 6, y);
+    ctx.arcTo(x + w, y, x + w, y + h2, 6);
+    ctx.arcTo(x + w, y + h2, x, y + h2, 6);
+    ctx.arcTo(x, y + h2, x, y, 6);
+    ctx.arcTo(x, y, x + w, y, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + padX, y + h2 / 2 + 1);
+    ctx.restore();
+  }
+
+  // Setup MediaRecorder on canvas stream
+  const stream = canvas.captureStream(30);
+  const mimeCandidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m)) || '';
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: 4_000_000 } : { videoBitsPerSecond: 4_000_000 });
+  const chunks = [];
+  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  const stopped = new Promise(r => recorder.onstop = r);
+  recorder.start();
+
+  setProgress(0.08, 'Recording…');
+
+  // Main render loop (real time × speed → advances playback time)
+  const startReal = performance.now();
+  let cancelled = false;
+  document.getElementById('videoExportClose').onclick = () => { cancelled = true; };
+  await new Promise((resolve) => {
+    function frame() {
+      if (cancelled) { resolve(); return; }
+      const realElapsed = performance.now() - startReal;
+      const playbackMs = Math.min(totalDurationMs, (realElapsed / videoDurationMs) * totalDurationMs);
+
+      // Draw MapLibre canvas onto composite canvas
+      ctx.fillStyle = '#f8f9fa';
+      ctx.fillRect(0, 0, 1280, 720);
+      ctx.drawImage(vmap.getCanvas(), 0, 0, 1280, 720);
+
+      // Draw all team markers + labels that are currently active
+      for (const { team, pb } of teamsWithPb) {
+        if (playbackMs > pb.duration) continue;
+        const pos = teamPositionAt(pb, playbackMs);
+        if (!pos) continue;
+        const pt = vmap.project([pos.lon, pos.lat]);
+        drawLabeledMarker(pt.x, pt.y, team.color, team.name);
+      }
+
+      // Draw timecode
+      drawTimecode(playbackMs);
+
+      const pct = Math.min(1, realElapsed / videoDurationMs);
+      setProgress(0.08 + pct * 0.9, `Recording… ${(pct * 100).toFixed(0)}%`);
+
+      if (realElapsed >= videoDurationMs) { resolve(); return; }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  });
+
+  recorder.stop();
+  await stopped;
+  setProgress(1, cancelled ? 'Cancelled' : 'Finalising video…');
+
+  if (!cancelled && chunks.length) {
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.download = `straight-line-mission-${ts}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  vmap.remove();
+  mapContainer._videoMap = null;
+
+  document.getElementById('videoProgressText').textContent = cancelled ? 'Export cancelled.' : 'Video saved.';
+  setTimeout(() => { closeVideoExportModal(); }, 1500);
+}
+
+document.getElementById('exportVideo').addEventListener('click', openVideoExportModal);
+document.getElementById('videoExportClose').addEventListener('click', closeVideoExportModal);
+document.getElementById('videoSpeed').addEventListener('change', updateVideoDurationEstimate);
+document.getElementById('videoExportStart').addEventListener('click', () => {
+  runVideoExport().catch(err => {
+    console.error('Video export failed:', err);
+    alert('Video export failed: ' + err.message);
+    closeVideoExportModal();
+  });
+});
+document.getElementById('videoExportModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('videoExportModal')) {
+    if (document.getElementById('videoExportProgress').hidden) closeVideoExportModal();
+  }
+});
 
 // Surface any uncaught errors in the sidebar so failures aren't silent.
 window.addEventListener('error', e => {
