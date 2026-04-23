@@ -21,6 +21,7 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 - **Live leaderboard** (top-right of the map) that ranks teams by max deviation
 - **Elevation profiles** (sparklines) plus ascent / descent / min–max from `<ele>` tags or FIT altitude records
 - **Basemap switcher** with thumbnails — Street (CartoDB Voyager), Topo (OpenTopoMap with contour lines / Isohypsen), and Satellite (Esri World Imagery)
+- **Live playback** — animate every team's GPS marker along its track at 1× / 5× / 10× / 20× / 50× / 100× speed, normalised to each team's own start so runs from different days can be compared side-by-side
 - **PDF export** — one A4 portrait page per team with name, rank, medal, full stats, a map snapshot (planned line + team track + max-deviation marker), and the elevation profile
 - Accurate geometry (local 2D projection pipeline + Douglas–Peucker simplification + spatial grid index), with a Web Worker so stats computation doesn't block the UI
 
@@ -30,7 +31,8 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 2. Drop the planned-line GPX into the **Planned Straight Line** slot.
 3. Add a team, name it, and drop in the team's `.gpx` or `.fit` recording. Repeat for each team.
 4. The map, leaderboard, and per-team stats update live.
-5. Click **Export PDF** to generate a per-team report. The app spins up a fresh map for each team, waits for tiles to load, then opens the browser's print dialog — pick **Save as PDF** as the destination to get one A4 page per team.
+5. If your team tracks carry timestamps, a **Live Playback** bar appears at the top of the map — press play to animate every team along its track at your chosen speed.
+6. Click **Export PDF** to generate a per-team report. The app spins up a fresh map for each team, waits for tiles to load, then opens the browser's print dialog — pick **Save as PDF** as the destination to get one A4 page per team.
 
 ## File formats
 
