@@ -1746,7 +1746,7 @@ function sync3DData() {
       if (!m) {
         const el = document.createElement('div');
         el.style.cssText = `width:14px;height:14px;border-radius:50%;background:${team.color};border:2px solid #fff;box-shadow:0 2px 4px rgba(0,0,0,0.4);`;
-        m = new maplibregl.Marker({ element: el }).setLngLat([p.lon, p.lat])
+        m = new maplibregl.Marker({ element: el, opacityWhenCovered: '0.15' }).setLngLat([p.lon, p.lat])
           .setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(`<b>${team.name}</b><br>Max dev: ${team.stats.maxDeviation.toFixed(1)} m`))
           .addTo(map3d);
         map3dMaxDevMarkers.set(team.id, m);
@@ -2723,7 +2723,7 @@ function updatePlaybackMarkers() {
       } else if (!m3d) {
         const el = document.createElement('div');
         el.style.cssText = `width:16px;height:16px;border-radius:50%;background:${team.color};border:2px solid #fff;box-shadow:0 2px 4px rgba(0,0,0,0.4);`;
-        m3d = new maplibregl.Marker({ element: el }).setLngLat([pos.lon, pos.lat]).addTo(map3d);
+        m3d = new maplibregl.Marker({ element: el, opacityWhenCovered: '0.15' }).setLngLat([pos.lon, pos.lat]).addTo(map3d);
         map3dMarkers.set(team.id, m3d);
       } else {
         m3d.setLngLat([pos.lon, pos.lat]);
@@ -3242,6 +3242,10 @@ async function runVideoExport() {
 
   // Main render loop (real time × speed → advances playback time)
   const followCamera = document.getElementById('videoFollowCamera').checked;
+  const is3DStyle = (styleKey === '3d');
+  const defaultPitch = is3DStyle ? 60 : 0;
+  let dynamicPitch = defaultPitch; // adjusted per frame when terrain occludes
+  let dynamicBearing = 0;
   const startReal = performance.now();
   let cancelled = false;
   document.getElementById('videoExportClose').onclick = () => { cancelled = true; };
@@ -3259,7 +3263,25 @@ async function runVideoExport() {
         if (pos) activePositions.push({ team, pos });
       }
 
+      // Check how many active markers are currently behind terrain.
+      // Project each marker to screen, then unproject the same screen point.
+      // If unproject returns a noticeably different lat/lng, a mountain is
+      // in the way (unproject hit-tests against the foreground terrain).
+      let occludedCount = 0;
+      if (is3DStyle && activePositions.length > 0) {
+        const occThreshSq = 1e-7; // ~0.03° — tolerates floating-point drift
+        for (const ap of activePositions) {
+          const pt = vmap.project([ap.pos.lon, ap.pos.lat]);
+          const back = vmap.unproject(pt);
+          const dLng = back.lng - ap.pos.lon;
+          const dLat = back.lat - ap.pos.lat;
+          if (dLng * dLng + dLat * dLat > occThreshSq) occludedCount++;
+        }
+      }
+
       // Camera follow — keep all active markers in frame by re-fitting bounds.
+      // In 3D, also flatten pitch (and gently pan bearing) when any marker
+      // is occluded; restore defaults once all are visible.
       if (followCamera && activePositions.length > 0) {
         const lngs = activePositions.map(p => p.pos.lon);
         const lats = activePositions.map(p => p.pos.lat);
@@ -3275,10 +3297,32 @@ async function runVideoExport() {
           const c = (minLat + maxLat) / 2;
           minLat = c - minDeg / 2; maxLat = c + minDeg / 2;
         }
-        const cam = vmap.cameraForBounds([[minLng, minLat], [maxLng, maxLat]], { padding: 120 });
+
+        if (is3DStyle) {
+          if (occludedCount > 0) {
+            // flatten the camera toward top-down so the mountain stops covering the markers
+            dynamicPitch = Math.max(0, dynamicPitch - 2.5);
+            // slowly rotate to try a different angle as well
+            dynamicBearing = (dynamicBearing + 2) % 360;
+          } else if (dynamicPitch < defaultPitch) {
+            // all clear — ease back to the normal pitch
+            dynamicPitch = Math.min(defaultPitch, dynamicPitch + 0.6);
+          }
+        }
+
+        const cam = vmap.cameraForBounds(
+          [[minLng, minLat], [maxLng, maxLat]],
+          { padding: 120, pitch: dynamicPitch, bearing: dynamicBearing }
+        );
         if (cam) {
-          // easeTo with small duration keeps motion smooth rather than jittery.
-          vmap.easeTo({ center: cam.center, zoom: cam.zoom, duration: 120, essential: true });
+          vmap.easeTo({
+            center: cam.center,
+            zoom: cam.zoom,
+            pitch: dynamicPitch,
+            bearing: dynamicBearing,
+            duration: 150,
+            essential: true
+          });
         }
       }
 
@@ -3287,7 +3331,7 @@ async function runVideoExport() {
       ctx.fillRect(0, 0, 1280, 720);
       ctx.drawImage(vmap.getCanvas(), 0, 0, 1280, 720);
 
-      // Draw all team markers + labels that are currently active
+      // Draw all team markers + labels that are currently active.
       for (const { team, pos } of activePositions) {
         const pt = vmap.project([pos.lon, pos.lat]);
         drawLabeledMarker(pt.x, pt.y, team.color, team.name);
