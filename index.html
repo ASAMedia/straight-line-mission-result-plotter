@@ -918,30 +918,76 @@ function parseGpx(text) {
   return points.filter(p => isFinite(p.lat) && isFinite(p.lon));
 }
 
+// Some Garmin devices write the FIT header with `data_size = 0` when a
+// recording is not cleanly finalised (watch powered off mid-activity, crash,
+// etc.). The file is otherwise valid, but parsers that honour the header
+// see zero data bytes and return no records — which is why re-saving the
+// file as a "route" works (the exporting tool rewrites the header with the
+// correct size). We patch the header in memory before parsing.
+function patchFitHeader(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  if (bytes.length < 14) return arrayBuffer;
+  const sig = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+  if (sig !== '.FIT') return arrayBuffer;
+  const headerSize = bytes[0];
+  const declared = bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+  const actual = bytes.length - headerSize - 2; // minus trailing 2-byte CRC
+  if (actual <= 0 || declared === actual) return arrayBuffer;
+  const patched = bytes.slice();
+  patched[4] = actual & 0xff;
+  patched[5] = (actual >>> 8) & 0xff;
+  patched[6] = (actual >>> 16) & 0xff;
+  patched[7] = (actual >>> 24) & 0xff;
+  return patched.buffer;
+}
+
 async function parseFit(arrayBuffer) {
+  arrayBuffer = patchFitHeader(arrayBuffer);
   const FitParser = await getFitParser();
+  // `mode: 'both'` gives us top-level flat arrays AND nested session/lap
+  // structures — we walk the whole tree because different Garmin exports
+  // put record messages in different places (top-level `records`, inside
+  // `sessions[].laps[].records`, inside `courses[].course_points`, etc.).
   const parser = new FitParser({
     force: true,
     speedUnit: 'km/h',
     lengthUnit: 'm',
     temperatureUnit: 'celsius',
     elapsedRecordField: true,
-    mode: 'list',
+    mode: 'both',
   });
   return new Promise((resolve, reject) => {
     parser.parse(arrayBuffer, (err, data) => {
       if (err) return reject(new Error(err));
-      const records = (data && data.records) || [];
-      const points = records
-        .filter(r => typeof r.position_lat === 'number' && typeof r.position_long === 'number')
-        .map(r => ({
-          lat: r.position_lat,
-          lon: r.position_long,
-          ele: typeof r.altitude === 'number' ? r.altitude
-             : typeof r.enhanced_altitude === 'number' ? r.enhanced_altitude
-             : null,
-          time: r.timestamp
-        }));
+      const seen = new Set();
+      const points = [];
+      const visit = obj => {
+        if (!obj || typeof obj !== 'object') return;
+        if (Array.isArray(obj)) { obj.forEach(visit); return; }
+        const lat = obj.position_lat, lon = obj.position_long;
+        if (typeof lat === 'number' && typeof lon === 'number' && isFinite(lat) && isFinite(lon)) {
+          // Dedup by timestamp+lat+lon in case both flat and nested copies are present.
+          const key = `${obj.timestamp || ''}|${lat}|${lon}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            points.push({
+              lat, lon,
+              ele: typeof obj.altitude === 'number' ? obj.altitude
+                 : typeof obj.enhanced_altitude === 'number' ? obj.enhanced_altitude
+                 : null,
+              time: obj.timestamp
+            });
+          }
+        }
+        for (const v of Object.values(obj)) visit(v);
+      };
+      visit(data);
+      // Preserve original order by timestamp when available.
+      points.sort((a, b) => {
+        const ta = a.time ? +new Date(a.time) : 0;
+        const tb = b.time ? +new Date(b.time) : 0;
+        return ta - tb;
+      });
       resolve(points);
     });
   });
