@@ -29,7 +29,7 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
   - ≤ 100 m — Bronze
 - **Live leaderboard** (top-right of the map) that ranks teams by max deviation
 - **Elevation profiles** (sparklines) plus ascent / descent / min–max from `<ele>` tags or FIT altitude records
-- **Basemap switcher** with thumbnails — Street (CartoDB Voyager), Topo (OpenTopoMap with contour lines / Isohypsen), and Satellite (Esri World Imagery)
+- **Basemap switcher** (collapses to the active tile; click to expand) — Street (CartoDB Voyager), Topo (OpenTopoMap with contour lines / Isohypsen), Satellite (Esri World Imagery), and **3D** terrain with pitch/rotate (MapLibre GL + AWS Terrain DEM, lazy-loaded on first click; no API key required)
 - **Live playback** — animate every team's GPS marker along its track at 1× / 5× / 10× / 20× / 50× / 100× speed, normalised to each team's own start so runs from different days can be compared side-by-side
 - **PDF export** — one A4 portrait page per team with name, rank, medal, full stats, a map snapshot (planned line + team track + max-deviation marker), and the elevation profile
 - Accurate geometry (local 2D projection pipeline + Douglas–Peucker simplification + spatial grid index), with a Web Worker so stats computation doesn't block the UI
