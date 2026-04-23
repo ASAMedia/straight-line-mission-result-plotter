@@ -170,6 +170,86 @@
     font-family: inherit;
   }
   .demo-link:hover { background: #d9e8ff; }
+
+  /* Small inline "action link" button — used for draw-on-map, export-gpx, etc. */
+  .link-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: none;
+    background: transparent;
+    color: #0d6efd;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 4px 2px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .link-btn:hover { color: #0b5ed7; text-decoration: underline; }
+
+  /* Floating "drawing mode" banner pinned to the top-center of the map. */
+  .draw-instructions {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px 8px 14px;
+    background: #0d6efd;
+    color: #fff;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(13, 110, 253, 0.35);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    animation: draw-banner-in 0.2s ease both;
+  }
+  .draw-instructions[hidden] { display: none; }
+  @keyframes draw-banner-in {
+    from { opacity: 0; transform: translate(-50%, -8px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+  }
+  .draw-icon { font-size: 15px; }
+  .draw-cancel {
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: transparent;
+    color: #fff;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .draw-cancel:hover { background: rgba(255, 255, 255, 0.15); }
+
+  /* Cursor/feedback while drawing. */
+  .drawing-mode .leaflet-container { cursor: crosshair !important; }
+
+  /* Inline action button inside the planned-info card (e.g. Export GPX). */
+  .info-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 6px;
+  }
+  .info-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid #dee2e6;
+    background: #fff;
+    color: #495057;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .info-action:hover { background: #f1f3f5; color: #212529; border-color: #adb5bd; }
   .demo-link-icon {
     display: inline-block;
     width: 14px;
@@ -1063,6 +1143,7 @@
       <input type="file" id="plannedFile" accept=".gpx">
       <div class="drop-label" id="plannedLabel">Click or drop a GPX file</div>
     </label>
+    <button type="button" class="link-btn" id="drawLineBtn">or draw a line on the map →</button>
     <div id="plannedInfo" class="info-card" style="display:none"></div>
 
     <h2>Teams</h2>
@@ -1150,6 +1231,13 @@
         <div class="video-hint" style="margin-top:6px">Keep this tab focused — recording is real-time.</div>
       </div>
     </div>
+  </div>
+
+  <!-- Floating banner shown while the user is drawing a line on the map. -->
+  <div id="drawInstructions" class="draw-instructions" hidden>
+    <span class="draw-icon" aria-hidden="true">✏</span>
+    <span class="draw-text" id="drawInstructionsText">Click the start point on the map</span>
+    <button type="button" class="draw-cancel" id="drawCancel">Cancel</button>
   </div>
 
   <!-- Off-screen containers for video rendering. Kept in flow (not display:none) so MapLibre can render. -->
@@ -1944,8 +2032,148 @@ function renderPlannedInfo() {
         ${buildElevationProfile(plannedLine, '#212529')}
       </div>
     </details>
+    <div class="info-actions">
+      <button type="button" class="info-action" id="exportPlannedGpx" title="Download the current planned line as a GPX file">
+        <span aria-hidden="true">⤓</span> Export as GPX
+      </button>
+    </div>
   `;
+  panel.querySelector('#exportPlannedGpx').addEventListener('click', exportPlannedLineAsGPX);
 }
+
+// ============================================================================
+// Draw-on-map + GPX export for the planned line.
+// ============================================================================
+
+// Shared post-load: everything that has to happen after plannedLine is set,
+// whether it came from a file upload or from drawing on the map.
+async function applyPlannedLine(pts, source = 'file') {
+  if (!pts || pts.length < 2) return;
+  plannedLine = pts;
+  const label = document.getElementById('plannedLabel');
+  if (source === 'draw') {
+    label.innerHTML = `<span class="file-loaded">✓ Line drawn on map</span><span class="badge">${pts.length} pts</span>`;
+  }
+  drawPlanned();
+  renderPlannedInfo();
+  for (const team of teams.values()) {
+    computeTeamStats(team);
+    drawTeam(team);
+    renderTeamStats(team);
+  }
+  renderLeaderboard();
+  sync3DData();
+  fitMap();
+}
+
+function exportPlannedLineAsGPX() {
+  if (!plannedLine || plannedLine.length < 2) return;
+  const now = new Date().toISOString();
+  const trkpts = plannedLine.map(p => {
+    const eleTag = (p.ele != null && isFinite(p.ele)) ? `<ele>${p.ele}</ele>` : '';
+    return `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${eleTag}</trkpt>`;
+  }).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Straight Line Mission Result Plotter"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name>Planned line</name>
+    <time>${now}</time>
+  </metadata>
+  <trk>
+    <name>Planned line</name>
+    <trkseg>
+${trkpts}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+  const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.download = `planned-line-${stamp}.gpx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ---- Draw mode state machine ----
+const drawState = {
+  active: false,
+  first: null,
+  previewMarker: null,
+  previewLine: null,
+  onClick: null,
+  onMove: null,
+  onKey: null
+};
+
+function startDrawLine() {
+  if (drawState.active) return;
+  drawState.active = true;
+  drawState.first = null;
+  document.getElementById('map').classList.add('drawing-mode');
+  const banner = document.getElementById('drawInstructions');
+  const bannerText = document.getElementById('drawInstructionsText');
+  banner.hidden = false;
+  bannerText.textContent = 'Click the start point on the map';
+
+  // Any existing planned line is kept on the map until the user actually
+  // confirms the new one (so they can see context). Reset it visually only
+  // after both points are clicked.
+
+  drawState.onClick = (e) => {
+    if (!drawState.first) {
+      drawState.first = { lat: e.latlng.lat, lon: e.latlng.lng };
+      drawState.previewMarker = L.circleMarker([drawState.first.lat, drawState.first.lon], {
+        radius: 7, color: '#0d6efd', weight: 3, fillColor: '#fff', fillOpacity: 1
+      }).addTo(map);
+      bannerText.textContent = 'Click the end point';
+    } else {
+      const firstPt = drawState.first;
+      const secondPt = { lat: e.latlng.lat, lon: e.latlng.lng };
+      cancelDrawLine(true);
+      applyPlannedLine([firstPt, secondPt], 'draw');
+    }
+  };
+  drawState.onMove = (e) => {
+    if (!drawState.first) return;
+    const cursor = [e.latlng.lat, e.latlng.lng];
+    if (!drawState.previewLine) {
+      drawState.previewLine = L.polyline(
+        [[drawState.first.lat, drawState.first.lon], cursor],
+        { color: '#0d6efd', weight: 3, dashArray: '6,5', opacity: 0.85 }
+      ).addTo(map);
+    } else {
+      drawState.previewLine.setLatLngs([[drawState.first.lat, drawState.first.lon], cursor]);
+    }
+  };
+  drawState.onKey = (e) => { if (e.key === 'Escape') cancelDrawLine(false); };
+  map.on('click', drawState.onClick);
+  map.on('mousemove', drawState.onMove);
+  document.addEventListener('keydown', drawState.onKey);
+}
+
+function cancelDrawLine(confirmed = false) {
+  if (!drawState.active) return;
+  map.off('click', drawState.onClick);
+  map.off('mousemove', drawState.onMove);
+  document.removeEventListener('keydown', drawState.onKey);
+  if (drawState.previewMarker) { map.removeLayer(drawState.previewMarker); drawState.previewMarker = null; }
+  if (drawState.previewLine) { map.removeLayer(drawState.previewLine); drawState.previewLine = null; }
+  drawState.active = false;
+  drawState.first = null;
+  document.getElementById('map').classList.remove('drawing-mode');
+  document.getElementById('drawInstructions').hidden = true;
+}
+
+document.getElementById('drawLineBtn').addEventListener('click', startDrawLine);
+document.getElementById('drawCancel').addEventListener('click', () => cancelDrawLine(false));
 
 function fitMap() {
   const bounds = [];
