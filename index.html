@@ -689,6 +689,32 @@
     border-radius: 10px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     font-family: 'Google Sans', Roboto, Arial, sans-serif;
+    cursor: pointer;
+    position: relative;
+  }
+  /* Collapsed: show only the active tile. Clicking anywhere on the
+     switcher flips it to .open and the rest fade/slide in. */
+  .basemap-switcher:not(.open) .basemap-option:not(.active) {
+    display: none;
+  }
+  .basemap-switcher.open .basemap-option:not(.active) {
+    animation: basemap-slide-in 0.18s ease both;
+  }
+  @keyframes basemap-slide-in {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  /* Small chevron hint in collapsed state so it's obvious it expands. */
+  .basemap-switcher:not(.open)::after {
+    content: '';
+    width: 10px;
+    height: 10px;
+    align-self: center;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236c757d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 4 4 4-4 4'/></svg>");
+    background-repeat: no-repeat;
+    background-size: contain;
+    opacity: 0.7;
+    margin-right: 2px;
   }
   .basemap-option {
     display: flex;
@@ -1512,28 +1538,43 @@ function exit3DMode() {
   map3dMarkers.clear();
 }
 
-document.querySelectorAll('.basemap-option').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const key = btn.dataset.layer;
-    if (key === currentBasemap) return;
-    document.querySelector('.basemap-option.active')?.classList.remove('active');
-    btn.classList.add('active');
-
-    if (key === '3d') {
-      enter3DMode();
+function selectBasemap(key, btn) {
+  if (key === currentBasemap) return;
+  document.querySelector('.basemap-option.active')?.classList.remove('active');
+  btn.classList.add('active');
+  if (key === '3d') {
+    enter3DMode();
+  } else {
+    if (currentBasemap === '3d') {
+      exit3DMode();
+      if (!map.hasLayer(basemapLayers[key])) basemapLayers[key].addTo(map);
     } else {
-      if (currentBasemap === '3d') {
-        exit3DMode();
-        // Make sure a Leaflet tile layer is attached
-        if (!map.hasLayer(basemapLayers[key])) basemapLayers[key].addTo(map);
-      } else {
-        map.removeLayer(basemapLayers[currentBasemap]);
-        basemapLayers[key].addTo(map);
-      }
+      map.removeLayer(basemapLayers[currentBasemap]);
+      basemapLayers[key].addTo(map);
     }
-    currentBasemap = key;
+  }
+  currentBasemap = key;
+}
+
+{
+  const switcherEl = document.getElementById('basemapSwitcher');
+  switcherEl.addEventListener('click', e => {
+    const btn = e.target.closest('.basemap-option');
+    const isOpen = switcherEl.classList.contains('open');
+    if (!isOpen) {
+      switcherEl.classList.add('open');
+      return;
+    }
+    if (btn) {
+      selectBasemap(btn.dataset.layer, btn);
+      switcherEl.classList.remove('open');
+    }
   });
-});
+  // Click anywhere outside the switcher collapses it.
+  document.addEventListener('click', e => {
+    if (!switcherEl.contains(e.target)) switcherEl.classList.remove('open');
+  });
+}
 
 const legend = L.control({ position: 'bottomright' });
 legend.onAdd = () => {
