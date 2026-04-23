@@ -473,6 +473,73 @@
     font-weight: 500;
   }
 
+  .playback-bar {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: white;
+    padding: 5px 10px 5px 5px;
+    border-radius: 999px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    font-family: inherit;
+    font-size: 12px;
+    max-width: calc(100% - 380px);
+  }
+  .playback-bar[hidden] { display: none; }
+  .playback-toggle {
+    width: 30px; height: 30px;
+    border: none;
+    background: #0d6efd;
+    color: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .playback-toggle:hover { background: #0b5ed7; }
+  .playback-toggle:disabled { background: #adb5bd; cursor: not-allowed; }
+  .playback-time {
+    font-variant-numeric: tabular-nums;
+    color: #495057;
+    min-width: 80px;
+    text-align: center;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .playback-slider {
+    width: 160px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: #0d6efd;
+  }
+  .playback-speeds {
+    display: flex;
+    gap: 2px;
+    padding-left: 4px;
+    border-left: 1px solid #e9ecef;
+    margin-left: 2px;
+  }
+  .playback-speed {
+    border: none;
+    background: transparent;
+    color: #6c757d;
+    padding: 3px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+  }
+  .playback-speed:hover { background: #f1f3f5; color: #212529; }
+  .playback-speed.active { background: #0d6efd; color: #fff; }
+
   .about-ctrl-btn {
     position: absolute;
     bottom: 20px;
@@ -750,6 +817,19 @@
   </div>
 
   <div id="colorPicker"></div>
+
+  <div id="playback" class="playback-bar" hidden>
+    <button class="playback-toggle" id="playbackToggle" type="button" aria-label="Play" title="Play / Pause">▶</button>
+    <span class="playback-time" id="playbackTime">0:00 / 0:00</span>
+    <input type="range" class="playback-slider" id="playbackSlider" min="0" max="1000" value="0" aria-label="Playback position">
+    <div class="playback-speeds" id="playbackSpeeds">
+      <button class="playback-speed active" type="button" data-speed="1">1×</button>
+      <button class="playback-speed" type="button" data-speed="5">5×</button>
+      <button class="playback-speed" type="button" data-speed="10">10×</button>
+      <button class="playback-speed" type="button" data-speed="20">20×</button>
+      <button class="playback-speed" type="button" data-speed="50">50×</button>
+    </div>
+  </div>
 
   <div id="printReport" aria-hidden="true"></div>
 
@@ -1475,9 +1555,12 @@ function renderTeam(team) {
 
   el.querySelector('.team-remove').addEventListener('click', () => {
     clearTeamLayers(team);
+    const marker = playback.markers.get(team.id);
+    if (marker) { map.removeLayer(marker); playback.markers.delete(team.id); }
     teams.delete(team.id);
     el.remove();
     renderLeaderboard();
+    updatePlaybackVisibility();
   });
 
   const drop = el.querySelector('.drop');
@@ -1504,6 +1587,7 @@ function renderTeam(team) {
       drawTeam(team);
       renderTeamStats(team);
       renderLeaderboard();
+      updatePlaybackVisibility();
       fitMap();
     } catch (err) {
       console.error(err);
@@ -1591,6 +1675,191 @@ enableDrop(plannedDrop, plannedInput, async file => {
 });
 
 document.getElementById('addTeam').addEventListener('click', addTeam);
+
+// ============================================================================
+// Playback — animate team markers along their tracks, normalised so each
+// team starts at t=0, so you can compare run durations at 1× / 5× / ... / 50×.
+// ============================================================================
+const playback = {
+  playing: false,
+  currentMs: 0,
+  durationMs: 0,
+  speed: 1,
+  rafId: null,
+  lastFrame: 0,
+  markers: new Map(), // teamId -> L.circleMarker
+  scrubbing: false,
+};
+
+// Cache playback-ready data on a team: sorted points that have parseable times
+// and their times expressed as milliseconds from the team's own start.
+function buildTeamPlayback(team) {
+  const pts = [];
+  const rel = [];
+  let t0 = null;
+  for (const p of team.points) {
+    if (!p.time) continue;
+    const t = +new Date(p.time);
+    if (!isFinite(t)) continue;
+    if (t0 === null) t0 = t;
+    pts.push(p);
+    rel.push(t - t0);
+  }
+  if (pts.length < 2) return null;
+  return { pts, rel, duration: rel[rel.length - 1] };
+}
+
+function teamPositionAt(pb, ms) {
+  if (!pb || ms < 0 || ms > pb.duration) return null;
+  let lo = 0, hi = pb.rel.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >>> 1;
+    if (pb.rel[mid] <= ms) lo = mid; else hi = mid;
+  }
+  const t0 = pb.rel[lo], t1 = pb.rel[hi];
+  const f = t1 > t0 ? (ms - t0) / (t1 - t0) : 0;
+  return {
+    lat: pb.pts[lo].lat + (pb.pts[hi].lat - pb.pts[lo].lat) * f,
+    lon: pb.pts[lo].lon + (pb.pts[hi].lon - pb.pts[lo].lon) * f
+  };
+}
+
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function rebuildAllTeamPlaybacks() {
+  let maxDur = 0;
+  for (const team of teams.values()) {
+    team.playbackData = buildTeamPlayback(team);
+    if (team.playbackData) maxDur = Math.max(maxDur, team.playbackData.duration);
+  }
+  playback.durationMs = maxDur;
+  if (playback.currentMs > maxDur) playback.currentMs = maxDur;
+}
+
+function updatePlaybackVisibility() {
+  rebuildAllTeamPlaybacks();
+  const bar = document.getElementById('playback');
+  if (playback.durationMs > 0) {
+    bar.hidden = false;
+    updatePlaybackUi();
+  } else {
+    pausePlayback();
+    clearPlaybackMarkers();
+    bar.hidden = true;
+  }
+}
+
+function clearPlaybackMarkers() {
+  for (const m of playback.markers.values()) map.removeLayer(m);
+  playback.markers.clear();
+}
+
+function updatePlaybackMarkers() {
+  for (const team of teams.values()) {
+    const pb = team.playbackData;
+    const pos = teamPositionAt(pb, playback.currentMs);
+    let marker = playback.markers.get(team.id);
+    if (!pos) {
+      if (marker) { map.removeLayer(marker); playback.markers.delete(team.id); }
+      continue;
+    }
+    if (!marker) {
+      marker = L.circleMarker([pos.lat, pos.lon], {
+        radius: 8, color: '#fff', weight: 2,
+        fillColor: team.color, fillOpacity: 1,
+        pane: 'markerPane'
+      }).addTo(map);
+      marker.bindTooltip(team.name, { direction: 'top', offset: [0, -8] });
+      playback.markers.set(team.id, marker);
+    } else {
+      marker.setLatLng([pos.lat, pos.lon]);
+    }
+  }
+}
+
+function updatePlaybackUi() {
+  const timeEl = document.getElementById('playbackTime');
+  const slider = document.getElementById('playbackSlider');
+  const toggle = document.getElementById('playbackToggle');
+  timeEl.textContent = `${formatDuration(playback.currentMs)} / ${formatDuration(playback.durationMs)}`;
+  if (!playback.scrubbing) {
+    const pct = playback.durationMs > 0 ? (playback.currentMs / playback.durationMs) * 1000 : 0;
+    slider.value = String(pct);
+  }
+  toggle.textContent = playback.playing ? '⏸' : '▶';
+  toggle.setAttribute('aria-label', playback.playing ? 'Pause' : 'Play');
+}
+
+function tick(now) {
+  if (!playback.playing) return;
+  const dt = playback.lastFrame ? now - playback.lastFrame : 0;
+  playback.lastFrame = now;
+  playback.currentMs += dt * playback.speed;
+  if (playback.currentMs >= playback.durationMs) {
+    playback.currentMs = playback.durationMs;
+    updatePlaybackMarkers();
+    updatePlaybackUi();
+    pausePlayback();
+    return;
+  }
+  updatePlaybackMarkers();
+  updatePlaybackUi();
+  playback.rafId = requestAnimationFrame(tick);
+}
+
+function startPlayback() {
+  if (playback.durationMs <= 0) return;
+  if (playback.currentMs >= playback.durationMs) playback.currentMs = 0; // rewind at end
+  playback.playing = true;
+  playback.lastFrame = 0;
+  playback.rafId = requestAnimationFrame(tick);
+  updatePlaybackUi();
+}
+
+function pausePlayback() {
+  playback.playing = false;
+  if (playback.rafId) { cancelAnimationFrame(playback.rafId); playback.rafId = null; }
+  updatePlaybackUi();
+}
+
+// Move the playback bar inside the map so it follows map resize/centering.
+{
+  const bar = document.getElementById('playback');
+  L.DomEvent.disableClickPropagation(bar);
+  L.DomEvent.disableScrollPropagation(bar);
+  document.getElementById('map').appendChild(bar);
+}
+
+document.getElementById('playbackToggle').addEventListener('click', () => {
+  if (playback.playing) pausePlayback(); else startPlayback();
+});
+
+document.getElementById('playbackSpeeds').addEventListener('click', e => {
+  const btn = e.target.closest('.playback-speed');
+  if (!btn) return;
+  playback.speed = parseFloat(btn.dataset.speed);
+  document.querySelectorAll('.playback-speed').forEach(b => b.classList.toggle('active', b === btn));
+});
+
+{
+  const slider = document.getElementById('playbackSlider');
+  slider.addEventListener('input', () => {
+    playback.scrubbing = true;
+    const frac = parseFloat(slider.value) / 1000;
+    playback.currentMs = frac * playback.durationMs;
+    updatePlaybackMarkers();
+    updatePlaybackUi();
+  });
+  slider.addEventListener('change', () => { playback.scrubbing = false; });
+}
 
 // ============================================================================
 // PDF export — builds a dedicated print report with one A4 page per team
