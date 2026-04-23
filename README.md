@@ -30,18 +30,22 @@ Drop in the planned line and each team's GPS track; the app overlays everything 
 - **Live leaderboard** (top-right of the map) that ranks teams by max deviation
 - **Elevation profiles** (sparklines) plus ascent / descent / min–max from `<ele>` tags or FIT altitude records
 - **Basemap switcher** (collapses to the active tile; click to expand) — Street (CartoDB Voyager), Topo (OpenTopoMap with contour lines / Isohypsen), Satellite (Esri World Imagery), and **3D** terrain with pitch/rotate (MapLibre GL + AWS Terrain DEM, lazy-loaded on first click; no API key required)
-- **Live playback** — animate every team's GPS marker along its track at 1× / 5× / 10× / 20× / 50× / 100× speed, normalised to each team's own start so runs from different days can be compared side-by-side
+- **Live playback** — animate every team's GPS marker along its track at 1× / 5× / 10× / 20× / 50× / 100× / 200× / 500× speed, normalised to each team's own start so runs from different days can be compared side-by-side
 - **PDF export** — one A4 portrait page per team with name, rank, medal, full stats, a map snapshot (planned line + team track + max-deviation marker), and the elevation profile
+- **Video export** — render the playback animation as a 1280×720 WebM file with team-name labels floating above each marker and a live timecode, at your chosen speed
+- **Demo data** — one-click "Try with demo data" button loads a sample planned line plus two simulated teams (with timestamps and elevation) so you can explore every feature without your own GPX files
 - Accurate geometry (local 2D projection pipeline + Douglas–Peucker simplification + spatial grid index), with a Web Worker so stats computation doesn't block the UI
 
 ## Usage
 
 1. Open the [live site](https://asamedia.github.io/straight-line-mission-result-plotter/) — or open [`index.html`](index.html) from a local clone; no build step, no local server required.
-2. Drop the planned-line GPX into the **Planned Straight Line** slot.
-3. Add a team, name it, and drop in the team's `.gpx` or `.fit` recording. Repeat for each team.
-4. The map, leaderboard, and per-team stats update live.
-5. If your team tracks carry timestamps, a **Live Playback** bar appears at the top of the map — press play to animate every team along its track at your chosen speed.
-6. Click **Export PDF** to generate a per-team report. The app spins up a fresh map for each team, waits for tiles to load, then opens the browser's print dialog — pick **Save as PDF** as the destination to get one A4 page per team.
+2. *(Optional)* click **▶ Try with demo data** at the top of the sidebar to load a sample planned line and two simulated teams — the fastest way to see everything in action.
+3. Drop your own planned-line GPX into the **Planned Straight Line** slot.
+4. Add a team, name it, and drop in the team's `.gpx` or `.fit` recording. Repeat for each team.
+5. The map, leaderboard, and per-team stats update live.
+6. If your team tracks carry timestamps, a **Live Playback** bar appears at the top of the map — press play to animate every team along its track at your chosen speed.
+7. Click **Export PDF** to generate a per-team report. The app spins up a fresh map for each team, waits for tiles to load, then opens the browser's print dialog — pick **Save as PDF** as the destination to get one A4 page per team.
+8. Click **Export Video** to record the playback as a 720p WebM (pick your speed; the dialog estimates the final video length).
 
 ## File formats
 
