@@ -149,6 +149,35 @@
     cursor: not-allowed;
   }
 
+  .demo-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: #eef5ff;
+    color: #0d6efd;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    margin-bottom: 12px;
+    font-family: inherit;
+  }
+  .demo-link:hover { background: #d9e8ff; }
+  .demo-link-icon {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #0d6efd;
+    color: #fff;
+    text-align: center;
+    font-size: 8px;
+    line-height: 14px;
+    padding-left: 1px;
+  }
+
   #printReport { display: none; }
 
   body.preparing-print > *:not(#printReport):not(.print-overlay) { display: none !important; }
@@ -1020,6 +1049,9 @@
   <div id="sidebar">
     <h1>Straight Line Mission Plotter</h1>
     <div class="subtitle">Plot planned lines vs. actual GPS tracks and find each team's max deviation.</div>
+    <button class="demo-link" id="loadDemo" type="button" title="Load a planned line and two sample team tracks">
+      <span class="demo-link-icon">▶</span> Try with demo data
+    </button>
 
     <h2>Planned Straight Line</h2>
     <label class="drop" id="plannedDrop">
@@ -2180,6 +2212,120 @@ enableDrop(plannedDrop, plannedInput, async file => {
 });
 
 document.getElementById('addTeam').addEventListener('click', addTeam);
+
+// ============================================================================
+// Demo data — one-click sample mission so first-time visitors can see the
+// full UI without needing their own GPX files. Generates a 2.4 km planned
+// line and two team tracks with timestamps (to enable playback) and
+// elevation (to enable the profile charts).
+// ============================================================================
+function buildDemoData() {
+  const lat1 = 50.937, lon1 = 11.377, lat2 = 50.949, lon2 = 11.349; // Mellingen → Belvedere
+  const baseTime = Date.now() - 6 * 3600 * 1000; // "earlier today" so playback timestamps look fresh
+
+  const planned = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+<metadata><name>Demo — Mellingen to Belvedere</name></metadata>
+<trk><name>Planned line</name><trkseg>
+<trkpt lat="${lat1}" lon="${lon1}"><ele>260</ele></trkpt>
+<trkpt lat="${lat2}" lon="${lon2}"><ele>340</ele></trkpt>
+</trkseg></trk></gpx>`;
+
+  function makeTrack(seed, baseDev, durationSec, name) {
+    let r = seed;
+    const rnd = () => { r = (r * 9301 + 49297) % 233280; return r / 233280; };
+    const pts = [];
+    const n = 60;
+    const dLat = lat2 - lat1, dLon = lon2 - lon1;
+    const pLat = -dLon, pLon = dLat;
+    const plen = Math.sqrt(pLat * pLat + pLon * pLon);
+    const uLat = pLat / plen, uLon = pLon / plen;
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const lat = lat1 + dLat * t;
+      const lon = lon1 + dLon * t;
+      const devM = Math.sin(t * Math.PI * 3) * baseDev + (rnd() - 0.5) * 15;
+      const devDeg = devM / 111320;
+      const latD = lat + uLat * devDeg;
+      const lonD = lon + uLon * devDeg / Math.cos(lat * Math.PI / 180);
+      const ele = 260 + t * 80 + Math.sin(t * Math.PI * 6) * 12;
+      const ts = new Date(baseTime + t * durationSec * 1000).toISOString();
+      pts.push(`<trkpt lat="${latD.toFixed(6)}" lon="${lonD.toFixed(6)}"><ele>${ele.toFixed(1)}</ele><time>${ts}</time></trkpt>`);
+    }
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><name>${name}</name><trkseg>
+${pts.join('\n')}
+</trkseg></trk></gpx>`;
+  }
+
+  return {
+    planned,
+    teamA: makeTrack(42, 35, 3600, 'Team Alpha'),
+    teamB: makeTrack(123, 85, 5400, 'Team Bravo')
+  };
+}
+
+function dispatchFile(input, name, content, mime = 'application/gpx+xml') {
+  const file = new File([content], name, { type: mime });
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function loadDemoData() {
+  // Remove any existing teams so the demo starts clean.
+  for (const team of [...teams.values()]) {
+    clearTeamLayers(team);
+    const m = playback.markers.get(team.id);
+    if (m) { map.removeLayer(m); playback.markers.delete(team.id); }
+    const m3d = map3dMarkers.get(team.id);
+    if (m3d) { m3d.remove(); map3dMarkers.delete(team.id); }
+    teams.delete(team.id);
+    if (team.element) team.element.remove();
+  }
+  renderLeaderboard();
+
+  const data = buildDemoData();
+
+  // Planned line first — drop into the existing input so the normal handler runs.
+  dispatchFile(document.getElementById('plannedFile'), 'demo-planned.gpx', data.planned);
+  await new Promise(r => setTimeout(r, 400));
+
+  // Rename a team entry's visible name to the given label.
+  const renameTeam = (teamEl, newName) => {
+    const nameInput = teamEl.querySelector('.team-name');
+    nameInput.value = newName;
+    nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  // Team Alpha — drop into the first (already-existing) team slot.
+  let teamInputs = document.querySelectorAll('.team input[type=file]');
+  if (teamInputs.length === 0) {
+    addTeam();
+    teamInputs = document.querySelectorAll('.team input[type=file]');
+  }
+  dispatchFile(teamInputs[0], 'alpha.gpx', data.teamA);
+  await new Promise(r => setTimeout(r, 400));
+  renameTeam(teamInputs[0].closest('.team'), 'Team Alpha');
+
+  // Team Bravo — add a new slot, drop the second file.
+  addTeam();
+  await new Promise(r => setTimeout(r, 50));
+  teamInputs = document.querySelectorAll('.team input[type=file]');
+  const bravoInput = teamInputs[teamInputs.length - 1];
+  dispatchFile(bravoInput, 'bravo.gpx', data.teamB);
+  await new Promise(r => setTimeout(r, 400));
+  renameTeam(bravoInput.closest('.team'), 'Team Bravo');
+}
+
+document.getElementById('loadDemo').addEventListener('click', () => {
+  loadDemoData().catch(err => {
+    console.error('Demo load failed:', err);
+    alert('Could not load demo data: ' + err.message);
+  });
+});
 
 // ============================================================================
 // Playback — animate team markers along their tracks, normalised so each
