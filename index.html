@@ -474,12 +474,13 @@
   }
 
   /* Outer wrapper: positioned to fill the map area that is NOT occupied by
-     the leaderboard reserve on the right, so the bar inside will never
-     overlap the leaderboard even when the window is narrow. */
+     the zoom control (top-left, 26px + 10px margin) or the leaderboard
+     reserve on the right, so the bar inside never overlaps either — even
+     when the window is narrow. */
   .playback-wrap {
     position: absolute;
     top: 16px;
-    left: 16px;
+    left: 56px;
     right: 372px;
     z-index: 1000;
     display: flex;
