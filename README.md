@@ -16,9 +16,9 @@ Upload a planned line and each team's GPS track → get max deviation, medals, a
 
 <div align="center">
 
-<video src="docs/demo.webm" controls muted loop playsinline width="760" poster="docs/screenshot-desktop.png"></video>
+![Playback animation of two teams along a planned line, exported from the app](docs/demo.gif)
 
-<sub><em>Live playback exported as a 720p WebM video — two teams along a ~2.4 km planned line near Weimar, sped up 10×.</em></sub>
+<sub><em>Live playback along a ~2.4 km planned line near Weimar — two teams, sped up 10×, recorded with the app's built-in video export.</em></sub>
 
 </div>
 
