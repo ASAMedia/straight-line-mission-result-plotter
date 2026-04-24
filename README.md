@@ -6,7 +6,7 @@
 
 Upload a planned line and each team's GPS track → get max deviation, medals, a live leaderboard, time-synced playback, PDF reports, and a recorded video — no accounts, no uploads to any server.
 
-**[→ Open the live app](https://asamedia.github.io/straight-line-mission-result-plotter/)**
+**[→ Open the live app](https://straightlinemission.app/)**
 
 </div>
 
@@ -39,7 +39,7 @@ Upload a planned line and each team's GPS track → get max deviation, medals, a
 
 ## Quick start
 
-1. **Open** the [live app](https://asamedia.github.io/straight-line-mission-result-plotter/) (or [`index.html`](index.html) from a local clone — no build, no install).
+1. **Open** the [live app](https://straightlinemission.app/) (or [`index.html`](index.html) from a local clone — no build, no install).
 2. **Load a planned line:** drop a GPX file, or click **"or draw a line on the map →"** and tap two points.
 3. **Add teams** and drop their `.gpx` or `.fit` recordings — one per team.
 4. The map, leaderboard, medals, elevation profiles, and stats update instantly.
