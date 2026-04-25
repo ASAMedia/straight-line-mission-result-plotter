@@ -26,8 +26,8 @@ Upload a planned line and each team's GPS track → get max deviation, medals, a
 
 <table align="center">
   <tr>
-    <td valign="bottom"><img src="docs/screenshot-desktop.png" alt="Desktop view" height="380"></td>
-    <td valign="bottom"><img src="docs/screenshot-mobile.png" alt="Mobile view" height="380"></td>
+    <td valign="bottom"><img src="docs/screenshot-desktop.jpg" alt="Desktop view" height="380"></td>
+    <td valign="bottom"><img src="docs/screenshot-mobile.jpg" alt="Mobile view" height="380"></td>
   </tr>
   <tr>
     <td align="center"><sub>Desktop — 3D terrain with basemap switcher expanded</sub></td>
