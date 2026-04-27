@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://asamedia.github.io/straight-line-mission-result-plotter/sitemap.xml
