@@ -2421,11 +2421,22 @@ function renderTeam(team) {
   enableDrop(drop, input, async files => {
     // First file fills the current team, additional files each spawn a
     // new team — so dropping N files at once produces N populated teams.
+    // We suppress the per-file fitMap during the cascade and call it once
+    // at the end so Leaflet doesn't get hit with overlapping fitBounds
+    // animations (which leaves missing tiles on subsequent zooms).
     const [first, ...rest] = files;
-    await loadTeamFile(team, first);
+    const multi = rest.length > 0;
+    await loadTeamFile(team, first, { fit: !multi });
     for (const f of rest) {
       const newTeam = addTeam();
-      await loadTeamFile(newTeam, f);
+      await loadTeamFile(newTeam, f, { fit: false });
+    }
+    if (multi) {
+      fitMap();
+      streetLayer.redraw();
+      topoLayer.redraw();
+      satelliteLayer.redraw();
+      map.invalidateSize();
     }
   });
 
@@ -2435,7 +2446,11 @@ function renderTeam(team) {
 // Load a single GPS file into the given team, updating UI, stats, map,
 // playback, and 3D sync. Extracted so the multi-file drop handler can
 // reuse the exact same flow for both the originating team and any extras.
-async function loadTeamFile(team, file) {
+// `fit` is false during multi-file cascades so we only fitMap once at the
+// end — repeated fitBounds calls cancel each other and confuse Leaflet's
+// tile request queue, leaving missing tiles after subsequent zooms.
+async function loadTeamFile(team, file, opts = {}) {
+  const { fit = true } = opts;
   const teamEl = team.element;
   const drop = teamEl.querySelector('.drop');
   const label = drop.querySelector('.drop-label');
@@ -2460,7 +2475,7 @@ async function loadTeamFile(team, file) {
     renderLeaderboard();
     updatePlaybackVisibility();
     sync3DData();
-    fitMap();
+    if (fit) fitMap();
   } catch (err) {
     console.error(err);
     label.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
