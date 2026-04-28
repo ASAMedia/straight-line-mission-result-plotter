@@ -2310,7 +2310,7 @@ function buildElevationProfile(track, color = '#0d6efd') {
   `;
 }
 
-function enableDrop(wrapper, input, onChange) {
+function enableDrop(wrapper, input, onFiles) {
   wrapper.addEventListener('dragover', e => {
     e.preventDefault(); wrapper.classList.add('drag');
   });
@@ -2318,11 +2318,12 @@ function enableDrop(wrapper, input, onChange) {
   wrapper.addEventListener('drop', e => {
     e.preventDefault();
     wrapper.classList.remove('drag');
-    const file = e.dataTransfer.files[0];
-    if (file) onChange(file);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length > 0) onFiles(files);
   });
   input.addEventListener('change', () => {
-    if (input.files[0]) onChange(input.files[0]);
+    const files = Array.from(input.files || []);
+    if (files.length > 0) onFiles(files);
   });
 }
 
@@ -2415,38 +2416,55 @@ function renderTeam(team) {
 
   const drop = el.querySelector('.drop');
   const input = drop.querySelector('input');
-  const label = drop.querySelector('.drop-label');
-  enableDrop(drop, input, async file => {
-    label.textContent = 'Parsing…';
-    try {
-      team.points = await parseFile(file);
-      if (team.points.length === 0) {
-        label.innerHTML = `<span class="file-error">No GPS points found in ${escapeHtml(file.name)}</span>`;
-        return;
-      }
-      label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${team.points.length.toLocaleString()} pts</span>`;
-      // Append the uploaded filename to the team name, replacing any previous
-      // " - filename" suffix from an earlier upload so a re-upload stays clean.
-      const baseName = team.name.includes(' - ')
-        ? team.name.substring(0, team.name.lastIndexOf(' - '))
-        : team.name;
-      team.name = `${baseName} - ${file.name}`;
-      nameInput.value = team.name;
-      nameInput.title = team.name;
-      computeTeamStats(team);
-      drawTeam(team);
-      renderTeamStats(team);
-      renderLeaderboard();
-      updatePlaybackVisibility();
-      sync3DData();
-      fitMap();
-    } catch (err) {
-      console.error(err);
-      label.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
+  // Allow picking multiple files at once from the OS file picker too.
+  input.setAttribute('multiple', '');
+  enableDrop(drop, input, async files => {
+    // First file fills the current team, additional files each spawn a
+    // new team — so dropping N files at once produces N populated teams.
+    const [first, ...rest] = files;
+    await loadTeamFile(team, first);
+    for (const f of rest) {
+      const newTeam = addTeam();
+      await loadTeamFile(newTeam, f);
     }
   });
 
   teamsContainer.appendChild(el);
+}
+
+// Load a single GPS file into the given team, updating UI, stats, map,
+// playback, and 3D sync. Extracted so the multi-file drop handler can
+// reuse the exact same flow for both the originating team and any extras.
+async function loadTeamFile(team, file) {
+  const teamEl = team.element;
+  const drop = teamEl.querySelector('.drop');
+  const label = drop.querySelector('.drop-label');
+  const nameInput = teamEl.querySelector('.team-name');
+  label.textContent = 'Parsing…';
+  try {
+    team.points = await parseFile(file);
+    if (team.points.length === 0) {
+      label.innerHTML = `<span class="file-error">No GPS points found in ${escapeHtml(file.name)}</span>`;
+      return;
+    }
+    label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${team.points.length.toLocaleString()} pts</span>`;
+    const baseName = team.name.includes(' - ')
+      ? team.name.substring(0, team.name.lastIndexOf(' - '))
+      : team.name;
+    team.name = `${baseName} - ${file.name}`;
+    nameInput.value = team.name;
+    nameInput.title = team.name;
+    computeTeamStats(team);
+    drawTeam(team);
+    renderTeamStats(team);
+    renderLeaderboard();
+    updatePlaybackVisibility();
+    sync3DData();
+    fitMap();
+  } catch (err) {
+    console.error(err);
+    label.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
+  }
 }
 
 function addTeam() {
@@ -2500,7 +2518,8 @@ document.addEventListener('click', e => {
 const plannedDrop = document.getElementById('plannedDrop');
 const plannedInput = document.getElementById('plannedFile');
 const plannedLabel = document.getElementById('plannedLabel');
-enableDrop(plannedDrop, plannedInput, async file => {
+enableDrop(plannedDrop, plannedInput, async files => {
+  const file = files[0];
   plannedLabel.textContent = 'Parsing…';
   try {
     const pts = await parseFile(file);
