@@ -290,6 +290,21 @@
   /* Cursor/feedback while drawing. */
   .drawing-mode .leaflet-container { cursor: crosshair !important; }
 
+  /* Draggable endpoint handles for a 2-point planned line. */
+  .planned-handle { background: transparent; border: none; }
+  .planned-handle-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #0d6efd;
+    border: 3px solid #ffffff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    box-sizing: border-box;
+    cursor: move;
+    transition: transform 0.12s ease;
+  }
+  .planned-handle-dot:hover { transform: scale(1.15); }
+
   /* Inline action button inside the planned-info card (e.g. Export GPX). */
   .info-actions {
     display: flex;
@@ -1985,6 +2000,7 @@ legend.addTo(map);
 // ---------- State ----------
 let plannedLine = null;
 let plannedLayer = null;
+let plannedHandles = []; // draggable endpoint handles when line has 2 points
 const teams = new Map();
 const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
                 '#42d4f4', '#f032e6', '#bfef45', '#fabebe', '#469990',
@@ -2000,7 +2016,10 @@ function pickColor() {
 // ---------- Drawing ----------
 function drawPlanned() {
   if (plannedLayer) { map.removeLayer(plannedLayer); plannedLayer = null; }
-  if (!plannedLine || plannedLine.length < 2) return;
+  if (!plannedLine || plannedLine.length < 2) {
+    clearPlannedHandles();
+    return;
+  }
   plannedLayer = L.polyline(plannedLine.map(p => [p.lat, p.lon]), {
     color: '#000',
     weight: 4,
@@ -2008,6 +2027,51 @@ function drawPlanned() {
     dashArray: '10,6'
   }).addTo(map);
   plannedLayer.bindTooltip('Planned line', { sticky: true });
+  refreshPlannedHandles();
+}
+
+function clearPlannedHandles() {
+  for (const m of plannedHandles) map.removeLayer(m);
+  plannedHandles = [];
+}
+
+// Place draggable handles on the start + end of the planned line. Only
+// shown when the line has exactly two points (drawn or simple two-point
+// GPX); multi-segment routes are left alone since dragging individual
+// points wouldn't make sense for those.
+function refreshPlannedHandles() {
+  clearPlannedHandles();
+  if (!plannedLine || plannedLine.length !== 2) return;
+  plannedLine.forEach((p, idx) => {
+    const icon = L.divIcon({
+      className: 'planned-handle',
+      html: '<div class="planned-handle-dot"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
+    });
+    const m = L.marker([p.lat, p.lon], { icon, draggable: true, autoPan: true });
+    m.bindTooltip(idx === 0 ? 'Drag to move the start point' : 'Drag to move the end point',
+                  { direction: 'top', offset: [0, -10] });
+    m.on('drag', e => {
+      const ll = e.target.getLatLng();
+      plannedLine[idx] = { ...plannedLine[idx], lat: ll.lat, lon: ll.lng };
+      // Live polyline update without rebuilding handles or recomputing stats.
+      if (plannedLayer) plannedLayer.setLatLngs(plannedLine.map(q => [q.lat, q.lon]));
+    });
+    m.on('dragend', () => {
+      // Full re-evaluation: stats, leaderboard, info card, 3D view.
+      renderPlannedInfo();
+      for (const team of teams.values()) {
+        computeTeamStats(team);
+        drawTeam(team);
+        renderTeamStats(team);
+      }
+      renderLeaderboard();
+      sync3DData();
+    });
+    m.addTo(map);
+    plannedHandles.push(m);
+  });
 }
 
 function clearTeamLayers(team) {
