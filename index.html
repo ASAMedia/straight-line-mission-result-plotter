@@ -41,10 +41,50 @@
     background: #f8f9fa;
     border-right: 1px solid #dee2e6;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 18px;
     flex-shrink: 0;
+    transition: width 0.25s ease, padding 0.25s ease, border-color 0.25s ease;
+  }
+  body.sidebar-collapsed #sidebar {
+    width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    border-right-color: transparent;
   }
   #map { flex: 1; }
+
+  /* Floating tab on the sidebar's right edge that toggles it open/closed.
+     The chevron flips direction based on state and the tab slides with the
+     sidebar so the affordance is always visible. */
+  #sidebarToggle {
+    position: fixed;
+    top: 50%;
+    left: 400px;
+    transform: translate(-1px, -50%);
+    width: 22px;
+    height: 52px;
+    border: 1px solid #dee2e6;
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+    background: #ffffff;
+    color: #495057;
+    cursor: pointer;
+    z-index: 1500;
+    padding: 0;
+    box-shadow: 2px 1px 6px rgba(0, 0, 0, 0.08);
+    font-family: inherit;
+    font-size: 16px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: left 0.25s ease, color 0.15s ease, background 0.15s ease;
+  }
+  #sidebarToggle:hover { background: #f8f9fa; color: #212529; }
+  #sidebarToggle::before { content: '‹'; }
+  body.sidebar-collapsed #sidebarToggle { left: 0; }
+  body.sidebar-collapsed #sidebarToggle::before { content: '›'; }
 
   h1 { font-size: 18px; margin-bottom: 4px; }
   .subtitle { font-size: 12px; color: #6c757d; margin-bottom: 16px; }
@@ -1121,7 +1161,31 @@
       border-bottom: 1px solid #dee2e6;
       flex-shrink: 0;
       padding: 14px;
+      transition: max-height 0.25s ease, padding 0.25s ease, border-color 0.25s ease;
     }
+    body.sidebar-collapsed #sidebar {
+      max-height: 0;
+      width: 100%;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-bottom-color: transparent;
+    }
+    /* On mobile the toggle hugs the bottom edge of the sidebar (or the
+       top of the map) and uses an up/down chevron instead of left/right. */
+    #sidebarToggle {
+      top: calc(45vh - 12px);
+      left: 50%;
+      transform: translate(-50%, 0);
+      width: 52px;
+      height: 22px;
+      border: 1px solid #dee2e6;
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    }
+    #sidebarToggle::before { content: '⌃'; transform: rotate(180deg); display: inline-block; }
+    body.sidebar-collapsed #sidebarToggle { top: 0; left: 50%; }
+    body.sidebar-collapsed #sidebarToggle::before { transform: rotate(0deg); }
     #map {
       flex: 1 1 auto;
       min-height: 0;
@@ -1207,6 +1271,7 @@
     <button class="secondary" id="exportPdf">Export PDF</button>
     <button class="secondary" id="exportVideo">Export Video</button>
   </div>
+  <button id="sidebarToggle" type="button" aria-label="Toggle sidebar" title="Show / hide sidebar"></button>
   <div id="map"></div>
 
   <div id="basemapSwitcher" class="basemap-switcher">
@@ -3522,6 +3587,22 @@ document.getElementById('videoExportModal').addEventListener('click', e => {
 window.addEventListener('error', e => {
   console.error('Uncaught error:', e.error || e.message);
 });
+
+// Sidebar slide-in/out toggle. Each toggle also forces Leaflet (and the 3D
+// canvas) to recompute their size, otherwise the map area would only show
+// half-loaded tiles after the sidebar collapses or expands.
+{
+  const toggleBtn = document.getElementById('sidebarToggle');
+  const onToggle = () => {
+    document.body.classList.toggle('sidebar-collapsed');
+    // Wait for the CSS transition to finish, then resize the maps.
+    setTimeout(() => {
+      map.invalidateSize();
+      if (typeof map3d !== 'undefined' && map3d) map3d.resize();
+    }, 280);
+  };
+  toggleBtn.addEventListener('click', onToggle);
+}
 
 // Bootstrap: show empty leaderboard + start with one empty team
 renderLeaderboard();
