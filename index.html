@@ -719,6 +719,12 @@
   }
   .info-row > span:first-child { color: #6c757d; }
   .info-row > strong { text-align: right; }
+  .elevation-pending {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #6c757d;
+    font-style: italic;
+  }
   .profile {
     width: 100%;
     height: 60px;
@@ -2201,6 +2207,8 @@ legend.addTo(map);
 let plannedLine = null;
 let plannedLayer = null;
 let plannedHandles = []; // draggable endpoint handles when line has 2 points
+let plannedLineProfile = null; // optional enriched copy of plannedLine with elevations sampled along the route
+let elevationFetchToken = 0;   // lets us cancel a stale fetch when the line changes mid-flight
 const teams = new Map();
 const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
                 '#42d4f4', '#f032e6', '#bfef45', '#fabebe', '#469990',
@@ -2269,6 +2277,8 @@ function refreshPlannedHandles() {
       renderLeaderboard();
       sync3DData();
       syncShareHash();
+      plannedLineProfile = null;
+      scheduleElevationFetch();
     });
     m.addTo(map);
     plannedHandles.push(m);
@@ -2429,12 +2439,17 @@ function renderPlannedInfo() {
   const gcDist = haversine(start, end);
   const polyDist = trackLength(plannedLine);
   const bear = (initialBearing(start, end) * 180 / Math.PI + 360) % 360;
-  const ele = elevationStats(plannedLine);
+  // Prefer the enriched profile (sampled + elevation-fetched) for the chart
+  // and stats when the original line has no elevation data of its own.
+  const lineForChart = plannedLineProfile || plannedLine;
+  const ele = elevationStats(lineForChart);
   const eleRows = ele ? `
     <div class="info-row"><span>Elevation range</span><strong>${ele.min.toFixed(0)} – ${ele.max.toFixed(0)} m</strong></div>
     <div class="info-row"><span>Total ascent</span><strong>+${ele.ascent.toFixed(0)} m</strong></div>
     <div class="info-row"><span>Total descent</span><strong>−${ele.descent.toFixed(0)} m</strong></div>
   ` : '';
+  const profileBlock = buildElevationProfile(lineForChart, '#212529')
+    || '<div class="elevation-pending">Fetching elevation profile…</div>';
   panel.style.display = 'block';
   panel.innerHTML = `
     <div class="info-row"><span>Straight-line distance</span><strong>${(gcDist / 1000).toFixed(3)} km</strong></div>
@@ -2447,7 +2462,7 @@ function renderPlannedInfo() {
         <div class="info-row"><span>Polyline length</span><strong>${(polyDist / 1000).toFixed(3)} km</strong></div>
         <div class="info-row"><span>Initial bearing</span><strong>${bear.toFixed(1)}°</strong></div>
         ${eleRows}
-        ${buildElevationProfile(plannedLine, '#212529')}
+        ${profileBlock}
       </div>
     </details>
     <div class="info-actions">
@@ -2490,6 +2505,8 @@ async function applyPlannedLine(pts, source = 'file') {
   renderLeaderboard();
   sync3DData();
   syncShareHash();
+  plannedLineProfile = null;
+  scheduleElevationFetch();
   fitMap();
 }
 
@@ -2627,6 +2644,73 @@ const SAMPLE_MISSIONS = [
     if (menu.open && !menu.contains(e.target)) menu.open = false;
   });
 })();
+
+// ============================================================================
+// Planned-line elevation profile — for drawn lines and simple 2-point GPX
+// files that don't carry their own elevation data, we sample N points along
+// the line and ask Open-Meteo's free elevation API (no key, supports CORS)
+// to fill them in. Token-based cancellation lets a new line's fetch
+// supersede an in-flight one.
+// ============================================================================
+
+let elevationFetchTimer = null;
+function scheduleElevationFetch() {
+  if (elevationFetchTimer) clearTimeout(elevationFetchTimer);
+  elevationFetchTimer = setTimeout(() => {
+    elevationFetchTimer = null;
+    enrichPlannedLineWithElevation();
+  }, 400);
+}
+
+async function enrichPlannedLineWithElevation() {
+  if (!plannedLine || plannedLine.length < 2) {
+    plannedLineProfile = null;
+    return;
+  }
+  // If the line ALREADY has dense elevation data (e.g. a 1700-pt Komoot
+  // track), use it as-is and skip the network call.
+  const denseEle = plannedLine.length >= 10
+    && plannedLine.every(p => p.ele != null && isFinite(p.ele));
+  if (denseEle) {
+    plannedLineProfile = plannedLine;
+    renderPlannedInfo();
+    return;
+  }
+
+  const token = ++elevationFetchToken;
+  const N = 80;
+  const samples = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    // Linear interpolation is sub-meter-accurate vs great-circle for
+    // typical straight-line mission distances (< 200 km).
+    samples.push({
+      lat: plannedLine[0].lat + (plannedLine[plannedLine.length - 1].lat - plannedLine[0].lat) * t,
+      lon: plannedLine[0].lon + (plannedLine[plannedLine.length - 1].lon - plannedLine[0].lon) * t
+    });
+  }
+
+  try {
+    const lats = samples.map(p => p.lat.toFixed(5)).join(',');
+    const lons = samples.map(p => p.lon.toFixed(5)).join(',');
+    const res = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`);
+    if (token !== elevationFetchToken) return; // a newer fetch superseded us
+    if (!res.ok) throw new Error('elevation API returned ' + res.status);
+    const data = await res.json();
+    if (!data || !Array.isArray(data.elevation)) throw new Error('unexpected response shape');
+    if (token !== elevationFetchToken) return;
+    plannedLineProfile = samples.map((p, i) => ({
+      lat: p.lat, lon: p.lon,
+      ele: typeof data.elevation[i] === 'number' ? data.elevation[i] : null
+    }));
+    renderPlannedInfo();
+  } catch (err) {
+    if (token !== elevationFetchToken) return;
+    console.warn('Could not fetch elevation profile:', err);
+    plannedLineProfile = null;
+    renderPlannedInfo();
+  }
+}
 
 function exportPlannedLineAsGPX() {
   if (!plannedLine || plannedLine.length < 2) return;
@@ -3034,6 +3118,8 @@ enableDrop(plannedDrop, plannedInput, async files => {
     renderLeaderboard();
     sync3DData();
     syncShareHash();
+    plannedLineProfile = null;
+    scheduleElevationFetch();
     fitMap();
   } catch (err) {
     console.error(err);
@@ -3236,6 +3322,8 @@ async function loadSessionFromText(text) {
     plannedLabel.textContent = 'Click or drop a GPX file';
   }
   drawPlanned();
+  plannedLineProfile = null;
+  scheduleElevationFetch();
   renderPlannedInfo();
 
   // 3. Restore teams.
