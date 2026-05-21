@@ -247,6 +247,13 @@
     font-family: inherit;
   }
   .link-btn:hover { color: #0b5ed7; text-decoration: underline; }
+  .session-actions {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 6px;
+    padding: 4px 0 2px;
+  }
 
   /* Floating "drawing mode" banner pinned to the top-center of the map. */
   .draw-instructions {
@@ -1289,6 +1296,11 @@
     <button class="primary" id="addTeam">+ Add Team</button>
     <button class="secondary" id="exportPdf">Export PDF</button>
     <button class="secondary" id="exportVideo">Export Video</button>
+    <div class="session-actions">
+      <button class="link-btn" type="button" id="saveSession" title="Download the current planned line and all teams as a .slm.json file">↓ Save session</button>
+      <button class="link-btn" type="button" id="loadSession" title="Restore a previously saved .slm.json session">↑ Load session</button>
+      <input type="file" id="loadSessionFile" accept=".json,.slm.json,application/json" hidden>
+    </div>
   </div>
   <button id="sidebarToggle" type="button" aria-label="Toggle sidebar" title="Show / hide sidebar"></button>
   <div id="map"></div>
@@ -2809,6 +2821,143 @@ document.getElementById('loadDemo').addEventListener('click', () => {
     console.error('Demo load failed:', err);
     alert('Could not load demo data: ' + err.message);
   });
+});
+
+// ============================================================================
+// Session save / load — round-trips planned line + all teams to a JSON file
+// so users can come back to a mission later or share the dataset.
+// ============================================================================
+const SESSION_FORMAT_VERSION = 1;
+
+function saveSession() {
+  if (!plannedLine && teams.size === 0) {
+    alert('Nothing to save yet — load a planned line or at least one team first.');
+    return;
+  }
+  const data = {
+    format: 'straight-line-mission-session',
+    version: SESSION_FORMAT_VERSION,
+    savedAt: new Date().toISOString(),
+    plannedLine: plannedLine || null,
+    teams: [...teams.values()].map(t => ({
+      name: t.name,
+      color: t.color,
+      points: t.points
+    }))
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.download = `mission-session-${stamp}.slm.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function loadSessionFromText(text) {
+  let data;
+  try { data = JSON.parse(text); }
+  catch (e) { throw new Error('File is not valid JSON: ' + e.message); }
+  if (!data || typeof data !== 'object') throw new Error('Session file is empty or malformed.');
+  if (data.format && data.format !== 'straight-line-mission-session') {
+    throw new Error('This JSON file does not look like a session file.');
+  }
+  const hasPlanned = Array.isArray(data.plannedLine) && data.plannedLine.length >= 2;
+  const teamList = Array.isArray(data.teams) ? data.teams : [];
+  if (!hasPlanned && teamList.length === 0) {
+    throw new Error('Session file has no planned line and no teams.');
+  }
+
+  // Confirm before wiping anything the user might still want.
+  if (teams.size > 0 || plannedLine) {
+    if (!confirm('Loading a session replaces your current planned line and teams. Continue?')) return;
+  }
+
+  // 1. Remove every existing team.
+  for (const team of [...teams.values()]) {
+    clearTeamLayers(team);
+    const m = playback.markers.get(team.id);
+    if (m) { map.removeLayer(m); playback.markers.delete(team.id); }
+    const m3d = map3dMarkers.get(team.id);
+    if (m3d) { m3d.remove(); map3dMarkers.delete(team.id); }
+    teams.delete(team.id);
+    if (team.element) team.element.remove();
+  }
+
+  // 2. Restore planned line (if any).
+  const plannedLabel = document.getElementById('plannedLabel');
+  if (hasPlanned) {
+    plannedLine = data.plannedLine.map(p => ({
+      lat: Number(p.lat),
+      lon: Number(p.lon),
+      ele: (p.ele != null && isFinite(p.ele)) ? Number(p.ele) : null,
+      time: p.time || undefined
+    }));
+    plannedLabel.innerHTML = `<span class="file-loaded">✓ Restored from session</span><span class="badge">${plannedLine.length.toLocaleString()} pts</span>`;
+  } else {
+    plannedLine = null;
+    plannedLabel.textContent = 'Click or drop a GPX file';
+  }
+  drawPlanned();
+  renderPlannedInfo();
+
+  // 3. Restore teams.
+  for (const t of teamList) {
+    const team = addTeam();
+    team.name = String(t.name || `Team ${team.id}`);
+    team.color = String(t.color || team.color);
+    team.points = Array.isArray(t.points) ? t.points.map(p => ({
+      lat: Number(p.lat),
+      lon: Number(p.lon),
+      ele: (p.ele != null && isFinite(p.ele)) ? Number(p.ele) : null,
+      time: p.time
+    })) : [];
+
+    // Sync the team's UI from the restored data.
+    const nameInput = team.element.querySelector('.team-name');
+    nameInput.value = team.name;
+    nameInput.title = team.name;
+    const swatch = team.element.querySelector('.team-color');
+    swatch.style.background = team.color;
+    if (team.points.length > 0) {
+      const label = team.element.querySelector('.drop-label');
+      label.innerHTML = `<span class="file-loaded">✓ Restored from session</span><span class="badge">${team.points.length.toLocaleString()} pts</span>`;
+    }
+
+    computeTeamStats(team);
+    drawTeam(team);
+    renderTeamStats(team);
+  }
+
+  renderLeaderboard();
+  updatePlaybackVisibility();
+  sync3DData();
+  fitMap();
+}
+
+document.getElementById('saveSession').addEventListener('click', () => {
+  try { saveSession(); }
+  catch (err) { console.error(err); alert('Save failed: ' + err.message); }
+});
+document.getElementById('loadSession').addEventListener('click', () => {
+  document.getElementById('loadSessionFile').click();
+});
+document.getElementById('loadSessionFile').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    await loadSessionFromText(text);
+  } catch (err) {
+    console.error('Session load failed:', err);
+    alert('Could not load session: ' + err.message);
+  } finally {
+    // Reset the input so picking the same file again still triggers change.
+    e.target.value = '';
+  }
 });
 
 // ============================================================================
