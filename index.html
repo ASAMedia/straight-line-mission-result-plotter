@@ -2448,7 +2448,7 @@ function renderPlannedInfo() {
     <div class="info-row"><span>Total ascent</span><strong>+${ele.ascent.toFixed(0)} m</strong></div>
     <div class="info-row"><span>Total descent</span><strong>−${ele.descent.toFixed(0)} m</strong></div>
   ` : '';
-  const profileBlock = buildElevationProfile(lineForChart, '#212529')
+  const profileBlock = buildElevationProfile(lineForChart, '#212529', { interactive: true })
     || '<div class="elevation-pending">Fetching elevation profile…</div>';
   panel.style.display = 'block';
   panel.innerHTML = `
@@ -2476,6 +2476,94 @@ function renderPlannedInfo() {
   `;
   panel.querySelector('#exportPlannedGpx').addEventListener('click', exportPlannedLineAsGPX);
   panel.querySelector('#copyShareLink').addEventListener('click', copyShareLink);
+  const profileSvg = panel.querySelector('svg.profile[data-profile-interactive]');
+  if (profileSvg) attachProfileHover(profileSvg, lineForChart);
+}
+
+// ---------- Interactive elevation profile ----------
+// One persistent map marker (re-used across hovers) shows the current
+// position on the planned line corresponding to the chart hover.
+let profileHoverMapMarker = null;
+
+function attachProfileHover(svg, track) {
+  // Pre-compute the valid (elevation-bearing) sub-track and its distances
+  // — same logic the chart used so indices align with X positions.
+  const dists = cumulativeDistances(track);
+  const totalDist = dists[dists.length - 1] || 1;
+  const valid = [];
+  for (let i = 0; i < track.length; i++) {
+    const e = track[i].ele;
+    if (typeof e === 'number' && isFinite(e)) {
+      valid.push({ d: dists[i], e, lat: track[i].lat, lon: track[i].lon });
+    }
+  }
+  if (valid.length < 2) return;
+  const W = 360, H = 60, PAD = 2;
+  const minE = Math.min(...valid.map(v => v.e));
+  const maxE = Math.max(...valid.map(v => v.e));
+  const range = maxE - minE || 1;
+  const xOf = d => PAD + (d / totalDist) * (W - 2 * PAD);
+  const yOf = e => H - PAD - ((e - minE) / range) * (H - 2 * PAD);
+
+  const cursor = svg.querySelector('.profile-cursor');
+  const cursorLine = svg.querySelector('.profile-cursor-line');
+  const cursorDot = svg.querySelector('.profile-cursor-dot');
+
+  // Binary search the sample whose along-track distance is closest to `d`.
+  function findClosestIdx(d) {
+    let lo = 0, hi = valid.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >>> 1;
+      if (valid[mid].d < d) lo = mid; else hi = mid;
+    }
+    return Math.abs(valid[lo].d - d) <= Math.abs(valid[hi].d - d) ? lo : hi;
+  }
+
+  function onMove(evt) {
+    const rect = svg.getBoundingClientRect();
+    const cx = evt.clientX != null ? evt.clientX : (evt.touches && evt.touches[0] && evt.touches[0].clientX);
+    if (cx == null) return;
+    const frac = Math.max(0, Math.min(1, (cx - rect.left) / rect.width));
+    const targetD = frac * totalDist;
+    const idx = findClosestIdx(targetD);
+    const v = valid[idx];
+    const sx = xOf(v.d);
+    const sy = yOf(v.e);
+    cursorLine.setAttribute('x1', sx.toFixed(2));
+    cursorLine.setAttribute('x2', sx.toFixed(2));
+    cursorDot.setAttribute('cx', sx.toFixed(2));
+    cursorDot.setAttribute('cy', sy.toFixed(2));
+    cursor.style.display = '';
+    svg.setAttribute('data-hover-elev', v.e.toFixed(0));
+    svg.setAttribute('data-hover-dist', (v.d / 1000).toFixed(2));
+    // Map marker
+    if (!profileHoverMapMarker) {
+      profileHoverMapMarker = L.circleMarker([v.lat, v.lon], {
+        radius: 7, color: '#fff', weight: 2,
+        fillColor: '#0d6efd', fillOpacity: 1,
+        pane: 'markerPane', interactive: false
+      }).addTo(map);
+      profileHoverMapMarker.bindTooltip('', { direction: 'top', offset: [0, -8], permanent: true });
+    } else {
+      profileHoverMapMarker.setLatLng([v.lat, v.lon]);
+    }
+    profileHoverMapMarker.setTooltipContent(`${v.e.toFixed(0)} m · ${(v.d / 1000).toFixed(2)} km`);
+  }
+
+  function onLeave() {
+    cursor.style.display = 'none';
+    if (profileHoverMapMarker) {
+      map.removeLayer(profileHoverMapMarker);
+      profileHoverMapMarker = null;
+    }
+  }
+
+  svg.addEventListener('mousemove', onMove);
+  svg.addEventListener('mouseleave', onLeave);
+  svg.addEventListener('touchstart', onMove, { passive: true });
+  svg.addEventListener('touchmove', onMove, { passive: true });
+  svg.addEventListener('touchend', onLeave);
+  svg.style.cursor = 'crosshair';
 }
 
 // ============================================================================
@@ -2838,7 +2926,7 @@ function escapeHtml(s) {
 }
 
 // Build an inline SVG sparkline showing the elevation profile along the track.
-function buildElevationProfile(track, color = '#0d6efd') {
+function buildElevationProfile(track, color = '#0d6efd', opts = {}) {
   const eles = track.map(p => p.ele);
   if (!eles.some(e => typeof e === 'number' && isFinite(e))) return '';
   const dists = cumulativeDistances(track);
@@ -2861,10 +2949,17 @@ function buildElevationProfile(track, color = '#0d6efd') {
   const distLabel = totalDist >= 1000
     ? `${(totalDist / 1000).toFixed(2)} km`
     : `${totalDist.toFixed(0)} m`;
+  // The `interactive` flag flips on a tag the post-render hook looks for to
+  // attach mouse-tracking + linked map marker.
+  const interactiveAttr = opts.interactive ? ' data-profile-interactive="1"' : '';
   return `
-    <svg class="profile" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <svg class="profile" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"${interactiveAttr}>
       <path d="${area}" fill="${color}" fill-opacity="0.18" />
       <path d="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" />
+      <g class="profile-cursor" style="display:none" pointer-events="none">
+        <line class="profile-cursor-line" x1="0" y1="0" x2="0" y2="${H}" stroke="${color}" stroke-width="0.8" opacity="0.7"/>
+        <circle class="profile-cursor-dot" cx="0" cy="0" r="2.5" fill="#ffffff" stroke="${color}" stroke-width="1.5"/>
+      </g>
     </svg>
     <div class="profile-label">
       <span>${minE.toFixed(0)} m</span>
