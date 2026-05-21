@@ -254,6 +254,37 @@
     margin-top: 6px;
     padding: 4px 0 2px;
   }
+  .mission-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    font-size: 12px;
+    color: #0d6efd;
+    font-weight: 500;
+  }
+  .mission-picker-row label { white-space: nowrap; }
+  .mission-picker-select {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid #dee2e6;
+    background: #fff;
+    color: #495057;
+    padding: 4px 22px 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 500;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236c757d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m4 6 4 4 4-4'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 5px center;
+    background-size: 12px;
+  }
+  .mission-picker-select:hover { border-color: #adb5bd; color: #212529; }
+  .mission-picker-select:focus { border-color: #0d6efd; outline: none; }
 
   /* Floating "drawing mode" banner pinned to the top-center of the map. */
   .draw-instructions {
@@ -1289,6 +1320,12 @@
       <div class="drop-label" id="plannedLabel">Click or drop a GPX file</div>
     </label>
     <button type="button" class="link-btn" id="drawLineBtn">or draw a line on the map →</button>
+    <div class="mission-picker-row">
+      <label for="missionPicker">or pick a sample mission</label>
+      <select id="missionPicker" class="mission-picker-select" aria-label="Sample mission catalog">
+        <option value="">— choose —</option>
+      </select>
+    </div>
     <div id="plannedInfo" class="info-card" style="display:none"></div>
 
     <h2>Teams</h2>
@@ -2071,7 +2108,7 @@ function refreshPlannedHandles() {
       if (plannedLayer) plannedLayer.setLatLngs(plannedLine.map(q => [q.lat, q.lon]));
     });
     m.on('dragend', () => {
-      // Full re-evaluation: stats, leaderboard, info card, 3D view.
+      // Full re-evaluation: stats, leaderboard, info card, 3D view, share URL.
       renderPlannedInfo();
       for (const team of teams.values()) {
         computeTeamStats(team);
@@ -2080,6 +2117,7 @@ function refreshPlannedHandles() {
       }
       renderLeaderboard();
       sync3DData();
+      syncShareHash();
     });
     m.addTo(map);
     plannedHandles.push(m);
@@ -2262,12 +2300,16 @@ function renderPlannedInfo() {
       </div>
     </details>
     <div class="info-actions">
+      <button type="button" class="info-action" id="copyShareLink" title="Copy a URL that pre-loads this planned line">
+        <span aria-hidden="true">⧉</span> <span class="share-label">Copy share link</span>
+      </button>
       <button type="button" class="info-action" id="exportPlannedGpx" title="Download the current planned line as a GPX file">
         <span aria-hidden="true">⤓</span> Export as GPX
       </button>
     </div>
   `;
   panel.querySelector('#exportPlannedGpx').addEventListener('click', exportPlannedLineAsGPX);
+  panel.querySelector('#copyShareLink').addEventListener('click', copyShareLink);
 }
 
 // ============================================================================
@@ -2282,6 +2324,10 @@ async function applyPlannedLine(pts, source = 'file') {
   const label = document.getElementById('plannedLabel');
   if (source === 'draw') {
     label.innerHTML = `<span class="file-loaded">✓ Line drawn on map</span><span class="badge">${pts.length} pts</span>`;
+  } else if (source === 'sample') {
+    label.innerHTML = `<span class="file-loaded">✓ Sample mission</span><span class="badge">${pts.length} pts</span>`;
+  } else if (source === 'share') {
+    label.innerHTML = `<span class="file-loaded">✓ Loaded from shared link</span><span class="badge">${pts.length} pts</span>`;
   }
   drawPlanned();
   renderPlannedInfo();
@@ -2292,8 +2338,136 @@ async function applyPlannedLine(pts, source = 'file') {
   }
   renderLeaderboard();
   sync3DData();
+  syncShareHash();
   fitMap();
 }
+
+// ============================================================================
+// Shareable URL — encodes a 2-point planned line in the URL hash so the
+// link itself carries the mission. Auto-syncs whenever the planned line
+// changes; on page load, restores any line present in the hash.
+// ============================================================================
+const SHARE_HASH_KEY = 'line';
+
+function encodePlannedLineForHash(line) {
+  if (!line || line.length !== 2) return null;
+  const fmt = p => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
+  return `${SHARE_HASH_KEY}=${fmt(line[0])};${fmt(line[1])}`;
+}
+
+function decodePlannedLineFromHash(hashStr) {
+  if (!hashStr) return null;
+  const params = new URLSearchParams(hashStr.replace(/^#/, ''));
+  const v = params.get(SHARE_HASH_KEY);
+  if (!v) return null;
+  const pts = v.split(';').map(pair => {
+    const [lat, lon] = pair.split(',').map(Number);
+    if (!isFinite(lat) || !isFinite(lon)) return null;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+    return { lat, lon };
+  }).filter(Boolean);
+  return pts.length === 2 ? pts : null;
+}
+
+function syncShareHash() {
+  const encoded = encodePlannedLineForHash(plannedLine);
+  if (encoded) {
+    history.replaceState(null, '', '#' + encoded);
+  }
+}
+
+async function copyShareLink() {
+  syncShareHash();
+  const url = location.href;
+  const btn = document.getElementById('copyShareLink');
+  const labelSpan = btn && btn.querySelector('.share-label');
+  const originalText = labelSpan ? labelSpan.textContent : 'Copy share link';
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    if (labelSpan) {
+      labelSpan.textContent = 'Copied ✓';
+      setTimeout(() => { labelSpan.textContent = originalText; }, 1800);
+    }
+  } catch (err) {
+    console.error('Clipboard write failed:', err);
+    prompt('Copy this link:', url);
+  }
+}
+
+// On page load, if the URL hash already contains a planned line, restore
+// it (no waiting for the user to upload a file). Runs after main script
+// initialization so the planned-line UI is already wired up.
+(() => {
+  const fromHash = decodePlannedLineFromHash(location.hash);
+  if (fromHash) {
+    setTimeout(() => applyPlannedLine(fromHash, 'share'), 0);
+  }
+})();
+
+// ============================================================================
+// Sample mission catalog — clicking an entry loads a 2-point planned line
+// at a recognisable endpoint pair. Users can refine it by dragging the
+// blue endpoint handles afterwards.
+// ============================================================================
+const SAMPLE_MISSIONS = [
+  {
+    id: 'weimar',
+    label: 'Mellingen → Belvedere (Weimar, Germany)',
+    start: { lat: 50.937, lon: 11.377 },
+    end:   { lat: 50.949, lon: 11.349 }
+  },
+  {
+    id: 'wales',
+    label: 'Aberystwyth → Knighton (across Wales)',
+    start: { lat: 52.413, lon: -4.082 },
+    end:   { lat: 52.343, lon: -3.043 }
+  },
+  {
+    id: 'norway',
+    label: 'Egersund → Halden (across southern Norway)',
+    start: { lat: 58.451, lon:  5.998 },
+    end:   { lat: 59.130, lon: 11.388 }
+  },
+  {
+    id: 'scotland',
+    label: 'Ardrossan → Stonehaven (across Scotland)',
+    start: { lat: 55.640, lon: -4.812 },
+    end:   { lat: 56.964, lon: -2.211 }
+  },
+  {
+    id: 'manhattan',
+    label: 'Battery Park → Inwood Hill Park (Manhattan)',
+    start: { lat: 40.703, lon: -74.017 },
+    end:   { lat: 40.872, lon: -73.926 }
+  }
+];
+
+(() => {
+  const sel = document.getElementById('missionPicker');
+  for (const m of SAMPLE_MISSIONS) {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.label;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener('change', () => {
+    const mission = SAMPLE_MISSIONS.find(m => m.id === sel.value);
+    sel.value = ''; // reset so the same mission can be picked again later
+    if (!mission) return;
+    applyPlannedLine([
+      { lat: mission.start.lat, lon: mission.start.lon },
+      { lat: mission.end.lat,   lon: mission.end.lon   }
+    ], 'sample');
+  });
+})();
 
 function exportPlannedLineAsGPX() {
   if (!plannedLine || plannedLine.length < 2) return;
@@ -2700,6 +2874,7 @@ enableDrop(plannedDrop, plannedInput, async files => {
     }
     renderLeaderboard();
     sync3DData();
+    syncShareHash();
     fitMap();
   } catch (err) {
     console.error(err);
