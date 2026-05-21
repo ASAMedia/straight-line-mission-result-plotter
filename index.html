@@ -247,12 +247,75 @@
     font-family: inherit;
   }
   .link-btn:hover { color: #0b5ed7; text-decoration: underline; }
-  .session-actions {
+  /* Consolidated actions dropdown: rolls the three export buttons + the
+     Save/Load Session links into a single details/summary control. */
+  .actions-menu {
+    margin-top: 8px;
+    position: relative;
+  }
+  .actions-menu > summary {
+    width: 100%;
+    padding: 10px 12px;
+    background: white;
+    color: #0d6efd;
+    border: 1px solid #0d6efd;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    list-style: none;
     display: flex;
-    justify-content: center;
-    gap: 16px;
-    margin-top: 6px;
-    padding: 4px 0 2px;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .actions-menu > summary::-webkit-details-marker { display: none; }
+  .actions-menu > summary:hover { background: #eef5ff; }
+  .actions-menu[open] > summary { background: #eef5ff; }
+  .actions-caret {
+    display: inline-block;
+    font-size: 12px;
+    transition: transform 0.15s;
+  }
+  .actions-menu[open] .actions-caret { transform: rotate(180deg); }
+  .actions-menu-body {
+    margin-top: 4px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: white;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+  }
+  .actions-menu-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 10px 14px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    border-bottom: 1px solid #f1f3f5;
+  }
+  .actions-menu-item:last-child { border-bottom: none; }
+  .actions-menu-item:hover { background: #f8f9fa; }
+  .actions-menu-item:disabled { color: #adb5bd; cursor: not-allowed; }
+  .actions-menu-item strong {
+    font-size: 13px;
+    color: #212529;
+    font-weight: 600;
+  }
+  .actions-menu-item:disabled strong { color: #adb5bd; }
+  .actions-menu-item .actions-hint {
+    font-size: 11px;
+    color: #6c757d;
+    margin-top: 2px;
+    font-weight: 400;
+  }
+  .actions-menu-divider {
+    height: 1px;
+    background: #e9ecef;
   }
   .mission-picker-row {
     display: flex;
@@ -1331,14 +1394,36 @@
     <h2>Teams</h2>
     <div id="teams"></div>
     <button class="primary" id="addTeam">+ Add Team</button>
-    <button class="secondary" id="exportPdf">Export PDF</button>
-    <button class="secondary" id="exportVideo">Export Video</button>
-    <button class="secondary" id="exportSummaryCard">Export Summary Card</button>
-    <div class="session-actions">
-      <button class="link-btn" type="button" id="saveSession" title="Download the current planned line and all teams as a .slm.json file">↓ Save session</button>
-      <button class="link-btn" type="button" id="loadSession" title="Restore a previously saved .slm.json session">↑ Load session</button>
-      <input type="file" id="loadSessionFile" accept=".json,.slm.json,application/json" hidden>
-    </div>
+    <details class="actions-menu" id="actionsMenu">
+      <summary>
+        <span>Export &amp; sessions</span>
+        <span class="actions-caret" aria-hidden="true">▾</span>
+      </summary>
+      <div class="actions-menu-body" role="menu">
+        <button class="actions-menu-item" id="exportPdf" type="button" role="menuitem">
+          <strong>PDF report</strong>
+          <span class="actions-hint">One A4 page per team with stats and map</span>
+        </button>
+        <button class="actions-menu-item" id="exportVideo" type="button" role="menuitem">
+          <strong>Video (WebM)</strong>
+          <span class="actions-hint">720p recording of the playback animation</span>
+        </button>
+        <button class="actions-menu-item" id="exportSummaryCard" type="button" role="menuitem">
+          <strong>Summary card (PNG)</strong>
+          <span class="actions-hint">1080×1080 image, perfect for social sharing</span>
+        </button>
+        <div class="actions-menu-divider"></div>
+        <button class="actions-menu-item" id="saveSession" type="button" role="menuitem">
+          <strong>↓ Save session</strong>
+          <span class="actions-hint">Download all teams + planned line as JSON</span>
+        </button>
+        <button class="actions-menu-item" id="loadSession" type="button" role="menuitem">
+          <strong>↑ Load session</strong>
+          <span class="actions-hint">Restore a previously saved session</span>
+        </button>
+        <input type="file" id="loadSessionFile" accept=".json,.slm.json,application/json" hidden>
+      </div>
+    </details>
   </div>
   <button id="sidebarToggle" type="button" aria-label="Toggle sidebar" title="Show / hide sidebar"></button>
   <div id="map"></div>
@@ -3135,6 +3220,19 @@ document.getElementById('loadSessionFile').addEventListener('change', async (e) 
     e.target.value = '';
   }
 });
+
+// Close the consolidated Actions dropdown after picking an item, and on
+// outside click. Listening at capture so the menu collapses before the
+// item's own click handler (e.g. opening a modal) takes focus.
+{
+  const menu = document.getElementById('actionsMenu');
+  menu.querySelectorAll('.actions-menu-item').forEach(item => {
+    item.addEventListener('click', () => { menu.open = false; });
+  });
+  document.addEventListener('click', (e) => {
+    if (menu.open && !menu.contains(e.target)) menu.open = false;
+  });
+}
 
 // ============================================================================
 // Playback — animate team markers along their tracks, normalised so each
