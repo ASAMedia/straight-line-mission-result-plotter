@@ -317,37 +317,96 @@
     height: 1px;
     background: #e9ecef;
   }
-  .mission-picker-row {
+  /* Planned-line input: dropzone + a small `+` menu beside it for the
+     alternative ways of setting the line (draw on map, sample missions). */
+  .planned-input-row {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 2px;
-    font-size: 12px;
-    color: #0d6efd;
-    font-weight: 500;
+    align-items: stretch;
+    gap: 6px;
   }
-  .mission-picker-row label { white-space: nowrap; }
-  .mission-picker-select {
+  .planned-input-row > .drop {
     flex: 1;
     min-width: 0;
-    border: 1px solid #dee2e6;
-    background: #fff;
-    color: #495057;
-    padding: 4px 22px 4px 8px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 12px;
-    font-family: inherit;
-    font-weight: 500;
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236c757d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m4 6 4 4 4-4'/></svg>");
-    background-repeat: no-repeat;
-    background-position: right 5px center;
-    background-size: 12px;
   }
-  .mission-picker-select:hover { border-color: #adb5bd; color: #212529; }
-  .mission-picker-select:focus { border-color: #0d6efd; outline: none; }
+  .planned-menu {
+    position: relative;
+    flex-shrink: 0;
+  }
+  .planned-menu-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 100%;
+    min-height: 100%;
+    border: 2px dashed #adb5bd;
+    border-radius: 6px;
+    background: white;
+    color: #6c757d;
+    font-size: 22px;
+    font-weight: 400;
+    line-height: 1;
+    cursor: pointer;
+    list-style: none;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+  }
+  .planned-menu-trigger::-webkit-details-marker { display: none; }
+  .planned-menu-trigger:hover,
+  .planned-menu[open] .planned-menu-trigger {
+    border-color: #0d6efd;
+    color: #0d6efd;
+    background: #eef5ff;
+  }
+  .planned-menu-body {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 1100;
+    min-width: 260px;
+    max-height: 340px;
+    overflow-y: auto;
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  }
+  .planned-menu-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 9px 14px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    border-bottom: 1px solid #f1f3f5;
+  }
+  .planned-menu-item:last-child { border-bottom: none; }
+  .planned-menu-item:hover { background: #f8f9fa; }
+  .planned-menu-item strong {
+    font-size: 13px;
+    color: #212529;
+    font-weight: 600;
+  }
+  .planned-menu-item .planned-menu-hint {
+    font-size: 11px;
+    color: #6c757d;
+    margin-top: 2px;
+    font-weight: 400;
+  }
+  .planned-menu-section {
+    padding: 8px 14px 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6c757d;
+    font-weight: 700;
+    background: #f8f9fa;
+    border-top: 1px solid #f1f3f5;
+    border-bottom: 1px solid #f1f3f5;
+  }
 
   /* Floating "drawing mode" banner pinned to the top-center of the map. */
   .draw-instructions {
@@ -1378,16 +1437,22 @@
     </button>
 
     <h2>Planned Straight Line</h2>
-    <label class="drop" id="plannedDrop">
-      <input type="file" id="plannedFile" accept=".gpx">
-      <div class="drop-label" id="plannedLabel">Click or drop a GPX file</div>
-    </label>
-    <button type="button" class="link-btn" id="drawLineBtn">or draw a line on the map →</button>
-    <div class="mission-picker-row">
-      <label for="missionPicker">or pick a sample mission</label>
-      <select id="missionPicker" class="mission-picker-select" aria-label="Sample mission catalog">
-        <option value="">— choose —</option>
-      </select>
+    <div class="planned-input-row">
+      <label class="drop" id="plannedDrop">
+        <input type="file" id="plannedFile" accept=".gpx">
+        <div class="drop-label" id="plannedLabel">Click or drop a GPX file</div>
+      </label>
+      <details class="planned-menu" id="plannedMenu">
+        <summary class="planned-menu-trigger" title="More ways to set the planned line" aria-label="More ways to set the planned line">+</summary>
+        <div class="planned-menu-body" role="menu">
+          <button class="planned-menu-item" id="drawLineBtn" type="button" role="menuitem">
+            <strong>Draw a line on the map</strong>
+            <span class="planned-menu-hint">Click a start and an end point</span>
+          </button>
+          <div class="planned-menu-section">Sample missions</div>
+          <div id="missionPickerList"></div>
+        </div>
+      </details>
     </div>
     <div id="plannedInfo" class="info-card" style="display:none"></div>
 
@@ -2536,22 +2601,30 @@ const SAMPLE_MISSIONS = [
   }
 ];
 
+// Populate the planned-line `+` menu with the sample missions, and wire
+// the menu's close-on-click + close-on-outside-click behaviour.
 (() => {
-  const sel = document.getElementById('missionPicker');
+  const list = document.getElementById('missionPickerList');
+  const menu = document.getElementById('plannedMenu');
   for (const m of SAMPLE_MISSIONS) {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.textContent = m.label;
-    sel.appendChild(opt);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'planned-menu-item';
+    btn.setAttribute('role', 'menuitem');
+    btn.innerHTML = `<strong>${m.label.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</strong>`;
+    btn.addEventListener('click', () => {
+      applyPlannedLine([
+        { lat: m.start.lat, lon: m.start.lon },
+        { lat: m.end.lat,   lon: m.end.lon   }
+      ], 'sample');
+    });
+    list.appendChild(btn);
   }
-  sel.addEventListener('change', () => {
-    const mission = SAMPLE_MISSIONS.find(m => m.id === sel.value);
-    sel.value = ''; // reset so the same mission can be picked again later
-    if (!mission) return;
-    applyPlannedLine([
-      { lat: mission.start.lat, lon: mission.start.lon },
-      { lat: mission.end.lat,   lon: mission.end.lon   }
-    ], 'sample');
+  menu.querySelectorAll('.planned-menu-item').forEach(item => {
+    item.addEventListener('click', () => { menu.open = false; });
+  });
+  document.addEventListener('click', e => {
+    if (menu.open && !menu.contains(e.target)) menu.open = false;
   });
 })();
 
