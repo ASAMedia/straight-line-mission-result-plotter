@@ -1333,6 +1333,7 @@
     <button class="primary" id="addTeam">+ Add Team</button>
     <button class="secondary" id="exportPdf">Export PDF</button>
     <button class="secondary" id="exportVideo">Export Video</button>
+    <button class="secondary" id="exportSummaryCard">Export Summary Card</button>
     <div class="session-actions">
       <button class="link-btn" type="button" id="saveSession" title="Download the current planned line and all teams as a .slm.json file">↓ Save session</button>
       <button class="link-btn" type="button" id="loadSession" title="Restore a previously saved .slm.json session">↑ Load session</button>
@@ -3973,6 +3974,281 @@ document.getElementById('videoExportModal').addEventListener('click', e => {
   if (e.target === document.getElementById('videoExportModal')) {
     if (document.getElementById('videoExportProgress').hidden) closeVideoExportModal();
   }
+});
+
+// ============================================================================
+// Summary card PNG export — renders the current mission as a 1080×1080 image
+// with header, map snapshot, leaderboard, and footer branding. Shareable on
+// social media without dragging a video file around.
+// ============================================================================
+
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+async function exportSummaryCard() {
+  const btn = document.getElementById('exportSummaryCard');
+  if (!plannedLine || plannedLine.length < 2) {
+    alert('Load a planned line first.');
+    return;
+  }
+  const eligibleTeams = [...teams.values()].filter(t => t.stats && t.points.length > 0);
+  if (eligibleTeams.length === 0) {
+    alert('Load at least one team track with a planned line set.');
+    return;
+  }
+
+  btn.disabled = true;
+  const origLabel = btn.textContent;
+  btn.textContent = 'Generating…';
+
+  const W = 1080, H = 1080;
+  const HEADER_H = 90;
+  const MAP_H = 600;
+  const FOOTER_H = 44;
+  const LB_H = H - HEADER_H - MAP_H - FOOTER_H; // ~346
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // ----- Background -----
+  ctx.fillStyle = '#f8f9fa';
+  ctx.fillRect(0, 0, W, H);
+
+  let vmap = null;
+  let mapContainer = null;
+  try {
+    // ----- Off-screen MapLibre for the map snapshot -----
+    await loadMapLibre();
+    mapContainer = document.getElementById('videoMap');
+    if (mapContainer._videoMap) { mapContainer._videoMap.remove(); mapContainer._videoMap = null; }
+    mapContainer.style.width = W + 'px';
+    mapContainer.style.height = MAP_H + 'px';
+
+    vmap = new maplibregl.Map({
+      container: 'videoMap',
+      preserveDrawingBuffer: true,
+      style: buildVideoStyle('street'),
+      interactive: false,
+      attributionControl: false,
+      fadeDuration: 0,
+      maxTileCacheSize: 1000,
+      refreshExpiredTiles: false
+    });
+    mapContainer._videoMap = vmap;
+    await new Promise(r => vmap.on('load', r));
+
+    // Planned line + team tracks as MapLibre layers
+    vmap.addSource('planned-line', {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: plannedLine.map(p => [p.lon, p.lat]) } }
+    });
+    vmap.addLayer({
+      id: 'planned-halo', type: 'line', source: 'planned-line',
+      paint: { 'line-color': '#fff', 'line-width': 7, 'line-opacity': 0.9 },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
+    vmap.addLayer({
+      id: 'planned', type: 'line', source: 'planned-line',
+      paint: { 'line-color': '#000', 'line-width': 3.5, 'line-dasharray': [2, 2] },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
+    for (const team of eligibleTeams) {
+      vmap.addSource('team-' + team.id, {
+        type: 'geojson',
+        data: { type: 'Feature', geometry: { type: 'LineString', coordinates: team.points.map(p => [p.lon, p.lat]) } }
+      });
+      vmap.addLayer({
+        id: 'team-' + team.id, type: 'line', source: 'team-' + team.id,
+        paint: { 'line-color': team.color, 'line-width': 4, 'line-opacity': 0.95 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' }
+      });
+    }
+
+    // Fit bounds covering everything
+    const allCoords = [];
+    plannedLine.forEach(p => allCoords.push([p.lon, p.lat]));
+    eligibleTeams.forEach(t => t.points.forEach(p => allCoords.push([p.lon, p.lat])));
+    const lngs = allCoords.map(c => c[0]);
+    const lats = allCoords.map(c => c[1]);
+    const cam = vmap.cameraForBounds(
+      [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+      { padding: 60 }
+    );
+    if (cam) vmap.jumpTo(cam);
+    await new Promise(resolve => {
+      const t = setTimeout(resolve, 4000);
+      vmap.once('idle', () => { clearTimeout(t); resolve(); });
+    });
+    await new Promise(r => setTimeout(r, 400)); // tiny extra wait for texture upload
+
+    // ----- Header -----
+    ctx.fillStyle = '#212529';
+    ctx.fillRect(0, 0, W, HEADER_H);
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 30px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Straight Line Mission Report', 32, HEADER_H / 2);
+    ctx.font = '16px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#adb5bd';
+    ctx.textAlign = 'right';
+    const distKm = (haversine(plannedLine[0], plannedLine[plannedLine.length - 1]) / 1000).toFixed(2);
+    const teamWord = eligibleTeams.length === 1 ? 'team' : 'teams';
+    ctx.fillText(`${distKm} km planned · ${eligibleTeams.length} ${teamWord}`, W - 32, HEADER_H / 2);
+
+    // ----- Map snapshot -----
+    ctx.drawImage(vmap.getCanvas(), 0, HEADER_H, W, MAP_H);
+    // Subtle hairline under map
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    ctx.fillRect(0, HEADER_H + MAP_H - 1, W, 1);
+
+    // Max-deviation markers — bullseye style matching the live map
+    for (const team of eligibleTeams) {
+      if (!team.stats || !team.stats.maxDeviationPoint) continue;
+      const p = team.stats.maxDeviationPoint;
+      const px = vmap.project([p.lon, p.lat]);
+      const cx = px.x;
+      const cy = px.y + HEADER_H;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = team.color;
+      ctx.stroke();
+    }
+  } finally {
+    if (vmap) {
+      vmap.remove();
+      mapContainer._videoMap = null;
+    }
+    if (mapContainer) {
+      mapContainer.style.width = '';
+      mapContainer.style.height = '';
+    }
+  }
+
+  // ----- Leaderboard -----
+  const ranked = [...eligibleTeams].sort((a, b) => a.stats.maxDeviation - b.stats.maxDeviation);
+  const lbTop = HEADER_H + MAP_H;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, lbTop, W, LB_H);
+
+  const maxRows = Math.min(ranked.length, 6);
+  const rowH = LB_H / maxRows;
+  const medalColors = {
+    'medal-platinum': { bg: '#c9ccd0', fg: '#3c3c3c' },
+    'medal-gold':     { bg: '#d4a820', fg: '#5c4500' },
+    'medal-silver':   { bg: '#a8a8a8', fg: '#212529' },
+    'medal-bronze':   { bg: '#9c5a24', fg: '#ffffff' },
+    'medal-none':     { bg: '#dee2e6', fg: '#6c757d' }
+  };
+  const rankColors = ['#b8941a', '#6c757d', '#9c5a24'];
+
+  for (let i = 0; i < maxRows; i++) {
+    const t = ranked[i];
+    const y = lbTop + i * rowH + rowH / 2;
+    // Alternating row tint
+    if (i % 2 === 1) {
+      ctx.fillStyle = '#f8f9fa';
+      ctx.fillRect(0, lbTop + i * rowH, W, rowH);
+    }
+    // Rank
+    ctx.fillStyle = rankColors[i] || '#868e96';
+    ctx.font = `700 ${Math.round(rowH * 0.55)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), 48, y);
+    // Colour swatch
+    const swatch = 26;
+    ctx.fillStyle = t.color;
+    drawRoundedRect(ctx, 90, y - swatch / 2, swatch, swatch, 4);
+    ctx.fill();
+    // Team name (truncate if too long)
+    ctx.fillStyle = '#212529';
+    ctx.font = '600 24px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    let name = t.name;
+    const maxNameWidth = W - 130 - 220;
+    while (ctx.measureText(name).width > maxNameWidth && name.length > 4) name = name.slice(0, -1);
+    if (name !== t.name) name = name.slice(0, -1) + '…';
+    ctx.fillText(name, 130, y);
+    // Medal pill
+    const medal = computeMedal(t.stats.maxDeviation);
+    const mc = medalColors[medal.className] || medalColors['medal-none'];
+    const mw = 100, mh = 32;
+    const mx = W - 280;
+    const my = y - mh / 2;
+    ctx.fillStyle = mc.bg;
+    drawRoundedRect(ctx, mx, my, mw, mh, mh / 2);
+    ctx.fill();
+    ctx.fillStyle = mc.fg;
+    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(medal.name, mx + mw / 2, y + 1);
+    // Max deviation
+    ctx.fillStyle = '#212529';
+    ctx.font = '700 26px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${t.stats.maxDeviation.toFixed(1)} m`, W - 32, y);
+  }
+  if (ranked.length > maxRows) {
+    ctx.fillStyle = '#6c757d';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`+ ${ranked.length - maxRows} more team${ranked.length - maxRows > 1 ? 's' : ''}`,
+                 W / 2, lbTop + LB_H - 14);
+  }
+
+  // ----- Footer -----
+  ctx.fillStyle = '#f1f3f5';
+  ctx.fillRect(0, H - FOOTER_H, W, FOOTER_H);
+  ctx.fillStyle = '#6c757d';
+  ctx.font = '14px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Created with straightlinemission.app', W / 2, H - FOOTER_H / 2);
+
+  // ----- Download -----
+  await new Promise(resolve => {
+    canvas.toBlob(blob => {
+      if (!blob) { resolve(); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.download = `mission-summary-${stamp}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      resolve();
+    }, 'image/png');
+  });
+
+  btn.disabled = false;
+  btn.textContent = origLabel;
+}
+
+document.getElementById('exportSummaryCard').addEventListener('click', () => {
+  exportSummaryCard().catch(err => {
+    console.error('Summary card export failed:', err);
+    alert('Could not generate summary card: ' + err.message);
+    const btn = document.getElementById('exportSummaryCard');
+    btn.disabled = false;
+    btn.textContent = 'Export Summary Card';
+  });
 });
 
 // Surface any uncaught errors in the sidebar so failures aren't silent.
