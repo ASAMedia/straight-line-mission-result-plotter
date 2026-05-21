@@ -146,6 +146,22 @@
     width: 18px; height: 18px; border-radius: 4px; flex-shrink: 0;
     cursor: pointer;
     border: 1px solid rgba(0,0,0,0.1);
+    position: relative;
+    transition: opacity 0.15s;
+  }
+  /* Hidden state when the user clicked the swatch to hide that team's
+     track on the map. Faded, with a diagonal slash to read "off". */
+  .team-color.team-hidden { opacity: 0.35; }
+  .team-color.team-hidden::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 4px;
+    background: linear-gradient(to top right,
+      transparent calc(50% - 1.2px),
+      #495057 calc(50% - 0.6px),
+      #495057 calc(50% + 0.6px),
+      transparent calc(50% + 1.2px));
   }
   .team-name {
     flex: 1;
@@ -2064,8 +2080,10 @@ function sync3DData() {
         layout: { 'line-cap': 'round', 'line-join': 'round' }
       });
     }
+    // Respect per-team visibility toggled by clicking the swatch.
+    map3d.setLayoutProperty(lyrId, 'visibility', team.visible === false ? 'none' : 'visible');
     // Max-deviation marker
-    if (team.stats && team.stats.maxDeviationPoint) {
+    if (team.stats && team.stats.maxDeviationPoint && team.visible !== false) {
       const p = team.stats.maxDeviationPoint;
       let m = map3dMaxDevMarkers.get(team.id);
       if (!m) {
@@ -2078,6 +2096,10 @@ function sync3DData() {
       } else {
         m.setLngLat([p.lon, p.lat]);
       }
+    } else {
+      // Remove a 3D max-dev marker for a now-hidden team.
+      const existing = map3dMaxDevMarkers.get(team.id);
+      if (existing) { existing.remove(); map3dMaxDevMarkers.delete(team.id); }
     }
   }
 
@@ -2294,6 +2316,7 @@ function clearTeamLayers(team) {
 function drawTeam(team) {
   clearTeamLayers(team);
   if (team.points.length < 1) return;
+  if (team.visible === false) return; // hidden via swatch click — leave map clean
 
   team.layer = L.polyline(team.points.map(p => [p.lat, p.lon]), {
     color: team.color,
@@ -2485,7 +2508,7 @@ function renderPlannedInfo() {
 // position on the planned line corresponding to the chart hover.
 let profileHoverMapMarker = null;
 
-function attachProfileHover(svg, track) {
+function attachProfileHover(svg, track, color = '#0d6efd') {
   // Pre-compute the valid (elevation-bearing) sub-track and its distances
   // — same logic the chart used so indices align with X positions.
   const dists = cumulativeDistances(track);
@@ -2536,13 +2559,16 @@ function attachProfileHover(svg, track) {
     cursor.style.display = '';
     svg.setAttribute('data-hover-elev', v.e.toFixed(0));
     svg.setAttribute('data-hover-dist', (v.d / 1000).toFixed(2));
-    // Map marker
-    if (!profileHoverMapMarker) {
+    // Map marker — recreated if the colour changed (e.g. switching from
+    // the planned-line chart to a team chart).
+    if (!profileHoverMapMarker || profileHoverMapMarker._slmColor !== color) {
+      if (profileHoverMapMarker) map.removeLayer(profileHoverMapMarker);
       profileHoverMapMarker = L.circleMarker([v.lat, v.lon], {
         radius: 7, color: '#fff', weight: 2,
-        fillColor: '#0d6efd', fillOpacity: 1,
+        fillColor: color, fillOpacity: 1,
         pane: 'markerPane', interactive: false
       }).addTo(map);
+      profileHoverMapMarker._slmColor = color;
       profileHoverMapMarker.bindTooltip('', { direction: 'top', offset: [0, -8], permanent: true });
     } else {
       profileHoverMapMarker.setLatLng([v.lat, v.lon]);
@@ -3016,11 +3042,13 @@ function renderTeamStats(team) {
         <div class="more-body">
           <div class="info-row"><span>Track points</span><strong>${team.points.length.toLocaleString()}</strong></div>
           ${eleRows}
-          ${buildElevationProfile(team.points, team.color)}
+          ${buildElevationProfile(team.points, team.color, { interactive: true })}
         </div>
       </details>
     ` : ''}
   `;
+  const svg = el.querySelector('svg.profile[data-profile-interactive]');
+  if (svg) attachProfileHover(svg, team.points, team.color);
 }
 
 function renderTeam(team) {
@@ -3042,7 +3070,18 @@ function renderTeam(team) {
 
   const swatch = el.querySelector('.team-color');
   swatch.style.background = team.color;
+  swatch.title = 'Click: hide/show track · Double-click or right-click: change colour';
+  // Single click → toggle visibility (used much more often than recolouring).
   swatch.addEventListener('click', e => {
+    e.preventDefault();
+    toggleTeamVisibility(team);
+  });
+  // Recolouring is still possible via double-click or context menu.
+  swatch.addEventListener('dblclick', e => {
+    e.preventDefault();
+    openColorPicker(swatch, team);
+  });
+  swatch.addEventListener('contextmenu', e => {
     e.preventDefault();
     openColorPicker(swatch, team);
   });
@@ -3147,11 +3186,27 @@ function addTeam() {
     id, name: `Team ${id}`, color: pickColor(),
     points: [], stats: null,
     layer: null, marker: null, devLine: null,
-    element: null
+    element: null,
+    visible: true
   };
   teams.set(id, team);
   renderTeam(team);
   return team;
+}
+
+// Single-click on the team color swatch flips track visibility on 2D and
+// 3D maps. Playback marker for a hidden team is also removed so it
+// doesn't continue to animate over a hidden track.
+function toggleTeamVisibility(team) {
+  team.visible = team.visible === false;
+  const swatch = team.element && team.element.querySelector('.team-color');
+  if (swatch) swatch.classList.toggle('team-hidden', !team.visible);
+  drawTeam(team);
+  const pm = playback.markers.get(team.id);
+  if (pm && !team.visible) { map.removeLayer(pm); playback.markers.delete(team.id); }
+  const m3d = map3dMarkers.get(team.id);
+  if (m3d && !team.visible) { m3d.remove(); map3dMarkers.delete(team.id); }
+  sync3DData();
 }
 
 // Color picker
