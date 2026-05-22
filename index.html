@@ -231,20 +231,30 @@
     cursor: not-allowed;
   }
 
+  /* Header row that places the demo button beside the section heading. */
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 18px 0 8px;
+  }
+  .section-header h2 { margin: 0; }
   .demo-link {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     border: none;
     background: #eef5ff;
     color: #0d6efd;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
-    padding: 6px 12px;
+    padding: 5px 10px;
     border-radius: 999px;
     cursor: pointer;
-    margin-bottom: 12px;
     font-family: inherit;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .demo-link:hover { background: #d9e8ff; }
 
@@ -1454,11 +1464,13 @@
   <div id="sidebar">
     <h1>Straight Line Mission Plotter</h1>
     <div class="subtitle">Plot planned lines vs. actual GPS tracks and find each team's max deviation.</div>
-    <button class="demo-link" id="loadDemo" type="button" title="Load a planned line and two sample team tracks">
-      <span class="demo-link-icon">▶</span> Try with demo data
-    </button>
 
-    <h2>Planned Straight Line</h2>
+    <div class="section-header">
+      <h2>Planned Straight Line</h2>
+      <button class="demo-link" id="loadDemo" type="button" title="Load a planned line and two sample team tracks">
+        <span class="demo-link-icon">▶</span> Try with demo data
+      </button>
+    </div>
     <div class="planned-input-row">
       <label class="drop" id="plannedDrop">
         <input type="file" id="plannedFile" accept=".gpx">
