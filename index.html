@@ -4119,8 +4119,27 @@ async function runVideoExport() {
     if (label) document.getElementById('videoProgressText').textContent = label;
   };
 
+  // Cancellation flag wired up BEFORE any await — the preload phase below
+  // takes long enough that users often click close before recording starts.
+  // The default addEventListener on the close button still hides the modal;
+  // we just additionally flip this flag so every phase can bail out cleanly.
+  let cancelled = false;
+  const closeBtn = document.getElementById('videoExportClose');
+  const cancelHandler = () => { cancelled = true; };
+  closeBtn.addEventListener('click', cancelHandler);
+  const bailIfCancelled = (vmap) => {
+    if (!cancelled) return false;
+    if (vmap) { try { vmap.remove(); } catch {} }
+    const mc = document.getElementById('videoMap');
+    if (mc) mc._videoMap = null;
+    closeVideoExportModal();
+    return true;
+  };
+
+  try {
   setProgress(0, 'Loading map engine…');
   await loadMapLibre();
+  if (bailIfCancelled(null)) return;
 
   setProgress(0.02, 'Initialising map…');
   const mapContainer = document.getElementById('videoMap');
@@ -4146,6 +4165,7 @@ async function runVideoExport() {
   mapContainer._videoMap = vmap;
 
   await new Promise(r => vmap.on('load', r));
+  if (bailIfCancelled(vmap)) return;
 
   // Add planned line + team tracks
   if (plannedLine && plannedLine.length >= 2) {
@@ -4189,6 +4209,7 @@ async function runVideoExport() {
 
   setProgress(0.05, 'Loading map tiles…');
   await new Promise(r => vmap.once('idle', r));
+  if (bailIfCancelled(vmap)) return;
 
   // Setup composite canvas
   const canvas = document.getElementById('videoCanvas');
@@ -4332,6 +4353,7 @@ async function runVideoExport() {
   if (followCamera) {
     const steps = 30;
     for (let i = 0; i <= steps; i++) {
+      if (bailIfCancelled(vmap)) return;
       const t = i / steps;
       const playbackT = t * totalDurationMs;
       const positions = [];
@@ -4355,9 +4377,15 @@ async function runVideoExport() {
       if (fixedZoom != null) {
         vmap.jumpTo({ center: ctr, zoom: fixedZoom, pitch: defaultPitch, bearing: 0 });
         await new Promise(resolve => {
-          const timer = setTimeout(resolve, 4000); // hard cap
-          vmap.once('idle', () => { clearTimeout(timer); resolve(); });
+          // Wake the wait if the user cancels mid-preload so we don't sit on
+          // the 4s hard cap for every remaining sample.
+          const timer = setTimeout(resolve, 4000);
+          const cancelPoll = setInterval(() => {
+            if (cancelled) { clearTimeout(timer); clearInterval(cancelPoll); resolve(); }
+          }, 100);
+          vmap.once('idle', () => { clearTimeout(timer); clearInterval(cancelPoll); resolve(); });
         });
+        if (bailIfCancelled(vmap)) return;
       }
       setProgress(0.03 + (i / steps) * 0.05, `Preloading map tiles… ${Math.round((i / steps) * 100)}%`);
     }
@@ -4378,11 +4406,10 @@ async function runVideoExport() {
   // Time spent actually recording (paused frames excluded) so playback
   // progress decouples from wall-clock — when tiles aren't ready we pause
   // the recorder and don't advance the playback clock, so the final video
-  // never contains blank/white frames.
+  // never contains blank/white frames. The outer `cancelled` flag set by
+  // the close button is what aborts the rAF loop.
   let recordedMs = 0;
   let lastTick = performance.now();
-  let cancelled = false;
-  document.getElementById('videoExportClose').onclick = () => { cancelled = true; };
   await new Promise((resolve) => {
     function frame() {
       if (cancelled) { resolve(); return; }
@@ -4455,7 +4482,7 @@ async function runVideoExport() {
     requestAnimationFrame(frame);
   });
 
-  recorder.stop();
+  if (recorder.state !== 'inactive') recorder.stop();
   await stopped;
   setProgress(1, cancelled ? 'Cancelled' : 'Finalising video…');
 
@@ -4477,6 +4504,9 @@ async function runVideoExport() {
 
   document.getElementById('videoProgressText').textContent = cancelled ? 'Export cancelled.' : 'Video saved.';
   setTimeout(() => { closeVideoExportModal(); }, 1500);
+  } finally {
+    closeBtn.removeEventListener('click', cancelHandler);
+  }
 }
 
 document.getElementById('exportVideo').addEventListener('click', openVideoExportModal);
