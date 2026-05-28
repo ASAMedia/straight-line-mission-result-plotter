@@ -198,6 +198,37 @@
   .team-stats strong { color: #212529; }
   .team-stats .hint { color: #adb5bd; font-style: italic; }
 
+  /* Trim slider — lets the user crop the end of a team's recording
+     when they forgot to stop their tracker. Hidden until the team
+     actually has enough points to make trimming meaningful. */
+  .team-trim {
+    display: none;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #f1f3f5;
+    font-size: 12px;
+    color: #495057;
+  }
+  .team-trim.has-trim { display: block; }
+  .team-trim-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .team-trim-label > span:first-child {
+    color: #6c757d;
+    cursor: help;
+  }
+  .team-trim-value { font-variant-numeric: tabular-nums; color: #212529; }
+  .team-trim.is-trimmed .team-trim-value { color: #d97706; font-weight: 600; }
+  .team-trim input[type="range"] {
+    width: 100%;
+    cursor: pointer;
+    margin: 0;
+  }
+
   button.primary {
     width: 100%;
     padding: 10px;
@@ -3077,6 +3108,13 @@ function renderTeam(team) {
       <div class="drop-label">Click or drop GPX / FIT</div>
     </label>
     <div class="team-stats"></div>
+    <div class="team-trim">
+      <div class="team-trim-label">
+        <span title="Drag to crop the end of the track — useful when the recording was stopped late">Trim end</span>
+        <span class="team-trim-value">—</span>
+      </div>
+      <input type="range" min="10" max="100" value="100" step="1" title="Drag left to crop the end of the track">
+    </div>
   `;
   team.element = el;
 
@@ -3150,7 +3188,57 @@ function renderTeam(team) {
     }
   });
 
+  // Trim slider — re-slices fullPoints on every input event and refreshes
+  // every dependent view. We deliberately don't refit the map so the user
+  // can keep an eye on the trimmed tail while dragging.
+  const trimSlider = el.querySelector('.team-trim input[type="range"]');
+  trimSlider.addEventListener('input', () => {
+    if (!team.fullPoints || team.fullPoints.length === 0) return;
+    const total = team.fullPoints.length;
+    const newEnd = Math.max(10, Math.min(total, parseInt(trimSlider.value, 10) || total));
+    if (newEnd === team.trimEnd) return;
+    team.trimEnd = newEnd;
+    team.points = team.fullPoints.slice(0, newEnd);
+    computeTeamStats(team);
+    drawTeam(team);
+    renderTeamStats(team);
+    renderLeaderboard();
+    updatePlaybackVisibility();
+    sync3DData();
+    updateTrimRowUI(team);
+  });
+
   teamsContainer.appendChild(el);
+}
+
+// Sync the trim row's slider range, current value, and km-of-km label to
+// match the team's current fullPoints / trimEnd. Hides the row entirely
+// when the track is too short for trimming to be meaningful.
+function updateTrimRowUI(team) {
+  const row = team.element && team.element.querySelector('.team-trim');
+  if (!row) return;
+  const slider = row.querySelector('input[type="range"]');
+  const valueEl = row.querySelector('.team-trim-value');
+  const total = team.fullPoints ? team.fullPoints.length : 0;
+  if (total < 10) {
+    row.classList.remove('has-trim', 'is-trimmed');
+    return;
+  }
+  row.classList.add('has-trim');
+  slider.min = '10';
+  slider.max = String(total);
+  const cur = Math.max(10, Math.min(total, team.trimEnd || total));
+  slider.value = String(cur);
+  const trimmed = cur < total;
+  row.classList.toggle('is-trimmed', trimmed);
+  const trimmedKm = (trackLength(team.points) / 1000).toFixed(2);
+  if (trimmed) {
+    const fullKm = (trackLength(team.fullPoints) / 1000).toFixed(2);
+    const droppedPts = total - cur;
+    valueEl.textContent = `${trimmedKm} / ${fullKm} km · −${droppedPts.toLocaleString()} pts`;
+  } else {
+    valueEl.textContent = `${trimmedKm} km`;
+  }
 }
 
 // Load a single GPS file into the given team, updating UI, stats, map,
@@ -3172,6 +3260,10 @@ async function loadTeamFile(team, file, opts = {}) {
       label.innerHTML = `<span class="file-error">No GPS points found in ${escapeHtml(file.name)}</span>`;
       return;
     }
+    // Keep an untrimmed copy so the trim slider can extend back to the
+    // original recording end. Default to no trimming applied.
+    team.fullPoints = team.points.slice();
+    team.trimEnd = team.points.length;
     label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${team.points.length.toLocaleString()} pts</span>`;
     const baseName = team.name.includes(' - ')
       ? team.name.substring(0, team.name.lastIndexOf(' - '))
@@ -3182,6 +3274,7 @@ async function loadTeamFile(team, file, opts = {}) {
     computeTeamStats(team);
     drawTeam(team);
     renderTeamStats(team);
+    updateTrimRowUI(team);
     renderLeaderboard();
     updatePlaybackVisibility();
     sync3DData();
@@ -3196,7 +3289,7 @@ function addTeam() {
   const id = ++teamCounter;
   const team = {
     id, name: `Team ${id}`, color: pickColor(),
-    points: [], stats: null,
+    points: [], fullPoints: [], trimEnd: 0, stats: null,
     layer: null, marker: null, devLine: null,
     element: null,
     visible: true
@@ -3499,6 +3592,10 @@ async function loadSessionFromText(text) {
       ele: (p.ele != null && isFinite(p.ele)) ? Number(p.ele) : null,
       time: p.time
     })) : [];
+    // Sessions store the already-trimmed track, so the restored points
+    // are the baseline for any further trimming.
+    team.fullPoints = team.points.slice();
+    team.trimEnd = team.points.length;
 
     // Sync the team's UI from the restored data.
     const nameInput = team.element.querySelector('.team-name');
@@ -3514,6 +3611,7 @@ async function loadSessionFromText(text) {
     computeTeamStats(team);
     drawTeam(team);
     renderTeamStats(team);
+    updateTrimRowUI(team);
   }
 
   renderLeaderboard();
