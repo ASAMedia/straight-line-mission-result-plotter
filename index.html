@@ -492,6 +492,110 @@
   }
 
   /* Floating "drawing mode" banner pinned to the top-center of the map. */
+  /* ---- Map location search. Stacks under the zoom control on the left: the
+     top strip is otherwise taken by the playback bar (centre) and the
+     leaderboard (right), and the bottom by basemap, legend and About. ---- */
+  .map-search {
+    width: 300px;
+    max-width: 70vw;
+    font-family: inherit;
+  }
+  .map-search-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    padding: 0 8px 0 10px;
+  }
+  .map-search-icon { color: #6c757d; font-size: 14px; line-height: 1; }
+  .map-search-input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 13px;
+    color: #212529;
+    padding: 9px 0;
+  }
+  .map-search-input::placeholder { color: #adb5bd; }
+  .map-search-clear {
+    border: none;
+    background: transparent;
+    color: #adb5bd;
+    cursor: pointer;
+    font-size: 17px;
+    line-height: 1;
+    padding: 2px 4px;
+  }
+  .map-search-clear:hover { color: #dc3545; }
+  /* Leaflet gives every control corner the same z-index, so the bottom-left
+     corner (basemap switcher) paints over the top-left one purely by DOM
+     order — which would bury the open result list. */
+  .leaflet-top.leaflet-left { z-index: 1001; }
+  .map-search-results {
+    margin-top: 4px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+    overflow: hidden auto;
+    max-height: 320px;
+  }
+  .map-search-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 13px;
+    color: #212529;
+    padding: 8px 10px;
+    cursor: pointer;
+    border-bottom: 1px solid #f1f3f5;
+  }
+  .map-search-item:last-child { border-bottom: none; }
+  .map-search-item:hover, .map-search-item.active { background: #eef5ff; }
+  .map-search-item,
+  .map-search-item .hit-sub {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .map-search-item .hit-sub {
+    display: block;
+    font-size: 11px;
+    color: #6c757d;
+    margin-top: 1px;
+  }
+  .map-search-note {
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #6c757d;
+  }
+  .map-search-note.error { color: #dc3545; }
+  /* Popup actions on a search hit. */
+  .search-popup-name { font-weight: 600; margin-bottom: 2px; }
+  .search-popup-sub { color: #6c757d; margin-bottom: 8px; }
+  .search-popup-actions { display: flex; gap: 6px; }
+  .search-popup-actions button {
+    flex: 1;
+    border: 1px solid #0d6efd;
+    background: #fff;
+    color: #0d6efd;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 8px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .search-popup-actions button:hover { background: #0d6efd; color: #fff; }
+
   .draw-instructions {
     position: absolute;
     top: 16px;
@@ -1422,6 +1526,13 @@
      Mobile layout
      ============================================================ */
   @media (max-width: 768px) {
+    /* The map shrinks to phone width and the leaderboard claims its right
+       half, so the search has to fit the strip left of it — hence the hard
+       cap rather than a percentage. Result text ellipsises at this width. */
+    .map-search { width: 160px; }
+    .map-search-input { font-size: 12px; padding: 8px 0; }
+    .map-search-results { max-height: 40vh; }
+
     body { flex-direction: column; }
     #sidebar {
       width: 100%;
@@ -2823,6 +2934,8 @@ async function applyPlannedLine(pts, source = 'file', fileName = null, name = ''
     label.innerHTML = `<span class="file-loaded">✓ Sample mission</span><span class="badge">${count} pts</span>`;
   } else if (source === 'share') {
     label.innerHTML = `<span class="file-loaded">✓ Loaded from shared link</span><span class="badge">${count} pts</span>`;
+  } else if (source === 'search') {
+    label.innerHTML = `<span class="file-loaded">✓ Set from map search</span><span class="badge">${count} pts</span>`;
   } else if (fileName) {
     label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(fileName)}</span><span class="badge">${count} pts</span>`;
   }
@@ -3304,6 +3417,267 @@ function cancelDrawLine(confirmed = false) {
 
 document.getElementById('drawLineBtn').addEventListener('click', startDrawLine);
 document.getElementById('drawCancel').addEventListener('click', () => cancelDrawLine(false));
+
+// ============================================================================
+// Map location search — type a place, jump there, and optionally make it the
+// start or end of the planned line. Geocoding is Komoot's Photon (OpenStreetMap
+// data, no API key, CORS, and unlike Nominatim its usage policy permits
+// search-as-you-type). Queries leave the browser; nothing else does.
+// ============================================================================
+const GEOCODER_URL = 'https://photon.komoot.io/api/';
+const SEARCH_MIN_CHARS = 3;
+const SEARCH_DEBOUNCE_MS = 300;
+
+// Endpoints picked from search hits. Either end may instead be taken from the
+// line already on the map, so moving just one end costs a single click.
+const searchEnds = { start: null, end: null };
+
+let searchMarker = null;
+let searchDebounce = null;
+let searchAbort = null;
+let searchToken = 0;
+
+// Photon returns a GeoJSON feature per hit; fold its loose property bag into
+// a headline and a subtitle.
+function describeHit(feature) {
+  const p = feature.properties || {};
+  const coords = (feature.geometry || {}).coordinates || [];
+  const name = p.name || [p.street, p.housenumber].filter(Boolean).join(' ') || 'Unnamed place';
+  const context = [p.city && p.city !== p.name ? p.city : null, p.state, p.country]
+    .filter(Boolean).join(', ');
+  return {
+    name,
+    context,
+    lat: coords[1],
+    lon: coords[0],
+    // [minLon, maxLat, maxLon, minLat] on areas — lets a city fill the view
+    // instead of zooming to its centroid at street level.
+    extent: Array.isArray(p.extent) && p.extent.length === 4 ? p.extent : null
+  };
+}
+
+function renderSearchNote(box, text, isError = false) {
+  box.innerHTML = `<div class="map-search-note${isError ? ' error' : ''}">${escapeHtml(text)}</div>`;
+  box.style.display = '';
+}
+
+function clearSearchResults(box) {
+  box.innerHTML = '';
+  box.style.display = 'none';
+}
+
+async function runGeocode(query, resultsBox, input) {
+  const token = ++searchToken;
+  if (searchAbort) searchAbort.abort();
+  searchAbort = new AbortController();
+  renderSearchNote(resultsBox, 'Searching…');
+  let hits;
+  try {
+    const res = await fetch(
+      `${GEOCODER_URL}?q=${encodeURIComponent(query)}&limit=8`,
+      { signal: searchAbort.signal }
+    );
+    if (token !== searchToken) return;          // a newer query superseded us
+    if (!res.ok) throw new Error('geocoder returned ' + res.status);
+    const data = await res.json();
+    hits = (data.features || []).map(describeHit)
+      .filter(h => isFinite(h.lat) && isFinite(h.lon));
+  } catch (err) {
+    if (err.name === 'AbortError' || token !== searchToken) return;
+    console.warn('Location search failed:', err);
+    renderSearchNote(resultsBox, 'Search is unavailable right now.', true);
+    return;
+  }
+  if (token !== searchToken) return;
+  if (hits.length === 0) {
+    renderSearchNote(resultsBox, `Nothing found for “${query}”.`);
+    return;
+  }
+  resultsBox.innerHTML = hits.map((h, i) => `
+    <button type="button" class="map-search-item" data-hit="${i}">
+      ${escapeHtml(h.name)}
+      ${h.context ? `<span class="hit-sub">${escapeHtml(h.context)}</span>` : ''}
+    </button>
+  `).join('');
+  resultsBox.style.display = '';
+  resultsBox._hits = hits;
+  resultsBox.querySelectorAll('.map-search-item').forEach(btn => {
+    btn.addEventListener('click', e => {
+      // Must stop here, not rely on the control's disableClickPropagation:
+      // clearing the list detaches this button mid-dispatch, so the event
+      // would never reach the control's guard, and Leaflet would read it as
+      // a map click and immediately shut the popup we are about to open.
+      e.stopPropagation();
+      gotoSearchHit(hits[+btn.dataset.hit]);
+      clearSearchResults(resultsBox);
+      input.blur();
+    });
+  });
+}
+
+// Fly to a hit and offer it as an endpoint.
+function gotoSearchHit(hit) {
+  if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+  if (hit.extent) {
+    const [minLon, maxLat, maxLon, minLat] = hit.extent;
+    map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [40, 40], maxZoom: 15 });
+  } else {
+    map.setView([hit.lat, hit.lon], Math.max(map.getZoom(), 13));
+  }
+  searchMarker = L.circleMarker([hit.lat, hit.lon], {
+    radius: 8, color: '#fff', weight: 3, fillColor: '#0d6efd', fillOpacity: 1
+  }).addTo(map);
+
+  const popup = L.DomUtil.create('div');
+  popup.innerHTML = `
+    <div class="search-popup-name">${escapeHtml(hit.name)}</div>
+    ${hit.context ? `<div class="search-popup-sub">${escapeHtml(hit.context)}</div>` : ''}
+    <div class="search-popup-actions">
+      <button type="button" data-end="start">Set as start</button>
+      <button type="button" data-end="end">Set as end</button>
+    </div>
+  `;
+  popup.querySelectorAll('button[data-end]').forEach(btn => {
+    // Same reason as the result list: setSearchEnd tears this popup down.
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      setSearchEnd(btn.dataset.end, hit);
+    });
+  });
+  searchMarker.bindPopup(popup, { closeButton: true, minWidth: 210 }).openPopup();
+}
+
+// Make a hit the start or end of the planned line. The other end comes from
+// whatever is already on the map, so one click is usually enough.
+function setSearchEnd(which, hit) {
+  // A multi-point route is real work; replacing it with a two-point line
+  // should never happen by accident.
+  if (plannedLine && plannedLine.length > 2 &&
+      !confirm('This replaces the loaded route with a straight two-point line. Continue?')) {
+    return;
+  }
+  searchEnds[which] = { lat: hit.lat, lon: hit.lon, label: hit.name };
+
+  const other = which === 'start' ? 'end' : 'start';
+  if (!searchEnds[other] && plannedLine && plannedLine.length === 2) {
+    const p = plannedLine[other === 'start' ? 0 : 1];
+    searchEnds[other] = { lat: p.lat, lon: p.lon, label: null };
+  }
+
+  if (!searchEnds.start || !searchEnds.end) {
+    const missing = searchEnds.start ? 'end' : 'start';
+    if (searchMarker) {
+      searchMarker.setPopupContent(
+        `<div class="search-popup-name">${escapeHtml(hit.name)}</div>` +
+        `<div class="search-popup-sub">Saved as the ${which}. Now search the ${missing} point.</div>`
+      );
+    }
+    return;
+  }
+
+  const { start, end } = searchEnds;
+  // Both ends came from search → name the mission after them, the way the
+  // built-in sample missions read. If only one end moved and the current name
+  // still reads "A → B", swap just that half so it keeps describing the line;
+  // a name the user wrote themselves is left alone.
+  let name;
+  if (start.label && end.label) {
+    name = `${start.label} → ${end.label}`;
+  } else {
+    const parts = plannedLineName.match(/^\s*(.+?)\s*→\s*(.+?)\s*$/);
+    name = parts
+      ? (which === 'start' ? `${start.label} → ${parts[2]}` : `${parts[1]} → ${end.label}`)
+      : plannedLineName;
+  }
+  searchEnds.start = searchEnds.end = null;
+  if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
+  applyPlannedLine(
+    [{ lat: start.lat, lon: start.lon }, { lat: end.lat, lon: end.lon }],
+    'search', null, name
+  );
+}
+
+{
+  // Added after the zoom control, so Leaflet stacks it directly underneath.
+  const control = L.control({ position: 'topleft' });
+  control.onAdd = () => {
+    const wrap = L.DomUtil.create('div', 'map-search');
+    wrap.innerHTML = `
+      <div class="map-search-box">
+        <span class="map-search-icon" aria-hidden="true">⌕</span>
+        <input type="text" class="map-search-input" id="mapSearchInput" autocomplete="off"
+               placeholder="Search for a place" aria-label="Search for a place">
+        <button type="button" class="map-search-clear" id="mapSearchClear"
+                aria-label="Clear search" hidden>×</button>
+      </div>
+      <div class="map-search-results" id="mapSearchResults" style="display:none"></div>
+    `;
+    // Without these, typing and scrolling the result list drive the map.
+    L.DomEvent.disableClickPropagation(wrap);
+    L.DomEvent.disableScrollPropagation(wrap);
+    return wrap;
+  };
+  control.addTo(map);
+
+  const input = document.getElementById('mapSearchInput');
+  const resultsBox = document.getElementById('mapSearchResults');
+  const clearBtn = document.getElementById('mapSearchClear');
+
+  const reset = () => {
+    input.value = '';
+    clearBtn.hidden = true;
+    clearSearchResults(resultsBox);
+    searchToken++;                       // strand any in-flight response
+    if (searchAbort) searchAbort.abort();
+  };
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearBtn.hidden = !q;
+    clearTimeout(searchDebounce);
+    if (q.length < SEARCH_MIN_CHARS) {
+      searchToken++;
+      clearSearchResults(resultsBox);
+      return;
+    }
+    searchDebounce = setTimeout(() => runGeocode(q, resultsBox, input), SEARCH_DEBOUNCE_MS);
+  });
+
+  input.addEventListener('keydown', e => {
+    const items = [...resultsBox.querySelectorAll('.map-search-item')];
+    const active = resultsBox.querySelector('.map-search-item.active');
+    const idx = active ? items.indexOf(active) : -1;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!items.length) return;
+      e.preventDefault();
+      const next = e.key === 'ArrowDown'
+        ? (idx + 1) % items.length
+        : (idx <= 0 ? items.length - 1 : idx - 1);
+      items.forEach(i => i.classList.remove('active'));
+      items[next].classList.add('active');
+      items[next].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(searchDebounce);
+      if (items.length) {
+        (active || items[0]).click();
+      } else if (input.value.trim().length >= SEARCH_MIN_CHARS) {
+        runGeocode(input.value.trim(), resultsBox, input);
+      }
+    } else if (e.key === 'Escape') {
+      // Draw mode also listens for Escape on document; don't cancel it from here.
+      e.stopPropagation();
+      if (resultsBox.style.display !== 'none') clearSearchResults(resultsBox);
+      else { reset(); input.blur(); }
+    }
+  });
+
+  clearBtn.addEventListener('click', () => { reset(); input.focus(); });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.map-search')) clearSearchResults(resultsBox);
+  });
+}
 
 function fitMap() {
   const bounds = [];
