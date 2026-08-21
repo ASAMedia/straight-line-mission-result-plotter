@@ -385,6 +385,32 @@
     flex: 1;
     min-width: 0;
   }
+  /* Mission name — free text, prefilled from the loaded file, carried into
+     every export. Deliberately lives outside #plannedInfo: that card is
+     re-rendered on each stats change, which would fight the caret. */
+  .planned-name-row {
+    display: flex;
+    align-items: center;
+    margin-top: 6px;
+  }
+  /* An author `display` beats the UA's [hidden] rule, so restate it here —
+     without this the row is never actually hidden. */
+  .planned-name-row[hidden] { display: none; }
+  .planned-name {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: white;
+    color: #212529;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    padding: 7px 9px;
+    text-overflow: ellipsis;
+  }
+  .planned-name:focus { border-color: #0d6efd; outline: none; }
+  .planned-name::placeholder { color: #adb5bd; font-weight: 400; }
   .planned-menu {
     position: relative;
     flex-shrink: 0;
@@ -621,6 +647,11 @@
     color: #6c757d;
     text-transform: uppercase;
     letter-spacing: 1pt;
+    /* Carries the mission name, which is free text — must never wrap onto a
+       second line, or the report stops fitting on one A4 page. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .print-mapcontainer {
     width: 100%;
@@ -1519,6 +1550,11 @@
         </div>
       </details>
     </div>
+    <div class="planned-name-row" id="plannedNameRow" hidden>
+      <input type="text" id="plannedName" class="planned-name" maxlength="120"
+             placeholder="Mission name" autocomplete="off"
+             title="Name for this mission — used in the GPX export, PDF report, summary card, saved session and share link">
+    </div>
     <div id="plannedInfo" class="info-card" style="display:none"></div>
 
     <h2>Teams</h2>
@@ -1932,7 +1968,18 @@ function parseGpx(text) {
   getAll('trkpt').forEach(push);
   if (points.length === 0) getAll('rtept').forEach(push);
   if (points.length === 0) getAll('wpt').forEach(push);
-  return points.filter(p => isFinite(p.lat) && isFinite(p.lon));
+  const clean = points.filter(p => isFinite(p.lat) && isFinite(p.lon));
+  // Carry the file's own name along so exports can reuse it instead of
+  // inventing one. Document order puts <metadata><name> ahead of <trk><name>,
+  // which is the priority we want.
+  // Only a <name> that belongs to the document, track or route describes the
+  // line — <author><name> and per-waypoint <name>s do not.
+  const nameUnder = parentTag => {
+    const el = getAll('name').find(n => n.parentNode && n.parentNode.localName === parentTag);
+    return el ? el.textContent.trim() : '';
+  };
+  clean.trackName = nameUnder('metadata') || nameUnder('trk') || nameUnder('rte') || '';
+  return clean;
 }
 
 // Some Garmin devices write the FIT header with `data_size = 0` when a
@@ -2334,6 +2381,7 @@ legend.addTo(map);
 
 // ---------- State ----------
 let plannedLine = null;
+let plannedLineName = '';      // free-text mission name, surfaced in every export
 let plannedLayer = null;
 let plannedHandles = []; // draggable endpoint handles when line has 2 points
 let plannedLineProfile = null; // optional enriched copy of plannedLine with elevations sampled along the route
@@ -2363,7 +2411,7 @@ function drawPlanned() {
     opacity: 0.9,
     dashArray: '10,6'
   }).addTo(map);
-  plannedLayer.bindTooltip('Planned line', { sticky: true });
+  plannedLayer.bindTooltip(plannedNameOrDefault(), { sticky: true });
   refreshPlannedHandles();
 }
 
@@ -2703,11 +2751,70 @@ function attachProfileHover(svg, track, color = '#0d6efd') {
 // Draw-on-map + GPX export for the planned line.
 // ============================================================================
 
+// The name to print in exports. Falls back to the old fixed label so a
+// mission the user never named still produces a sensible file.
+const PLANNED_NAME_FALLBACK = 'Planned line';
+
+function plannedNameOrDefault() {
+  return plannedLineName.trim() || PLANNED_NAME_FALLBACK;
+}
+
+// Filesystem-safe stem for download names, e.g. "Wales Überquerung" →
+// "wales-uberquerung". Falls back to the previous fixed stem when unnamed.
+function missionFileSlug(fallback) {
+  const slug = plannedLineName.trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // strip diacritics
+    .toLowerCase()
+    // Keep letters and digits of ANY script \u2014 folding to a-z would reduce a
+    // Cyrillic or Japanese name to nothing and silently give every such
+    // mission the same generic filename.
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return slug || fallback;
+}
+
+const PLANNED_NAME_MAX = 120;
+
+// Names arrive from files, saved sessions and hand-editable URLs, so they can
+// carry control characters. Left in place they render as tofu on the summary
+// card and make the exported GPX invalid XML ("PCDATA invalid Char value").
+function stripLoneSurrogates(s) {
+  return s
+    .replace(/[\ud800-\udbff](?![\udc00-\udfff])/g, '')
+    .replace(/(^|[^\ud800-\udbff])([\udc00-\udfff])/g, '$1');
+}
+
+function sanitizeMissionName(name) {
+  return stripLoneSurrogates(
+    String(name || '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .replace(/[\ufffe\uffff]/g, '')   // never legal in XML text
+      .replace(/\s+/g, ' ')
+      .trim()
+      // Counts UTF-16 units, so it can cut an emoji in half — hence the
+      // surrogate sweep, without which encodeURIComponent throws URIError
+      // and takes the whole planned-line load down with it.
+      .slice(0, PLANNED_NAME_MAX)
+  ).trim();
+}
+
+// Single writer for the mission name: keeps the state, the input and the
+// row's visibility in step no matter which load path set the line.
+function setPlannedLineName(name) {
+  plannedLineName = sanitizeMissionName(name);
+  const row = document.getElementById('plannedNameRow');
+  const input = document.getElementById('plannedName');
+  if (input && input.value !== plannedLineName) input.value = plannedLineName;
+  if (row) row.hidden = !plannedLine;
+}
+
 // Shared post-load: everything that has to happen after plannedLine is set,
 // whether it came from a file upload or from drawing on the map.
-async function applyPlannedLine(pts, source = 'file', fileName = null) {
+async function applyPlannedLine(pts, source = 'file', fileName = null, name = '') {
   if (!pts || pts.length < 2) return;
   plannedLine = pts;
+  setPlannedLineName(name);
   const label = document.getElementById('plannedLabel');
   const count = pts.length.toLocaleString();
   if (source === 'draw') {
@@ -2750,6 +2857,8 @@ async function applyPlannedLine(pts, source = 'file', fileName = null) {
 // ============================================================================
 const SHARE_HASH_KEY = 'line';       // legacy / two-point, human-readable
 const SHARE_HASH_KEY_COMPACT = 'l';  // full polyline, compactly encoded
+const SHARE_HASH_KEY_NAME = 'n';     // mission name, so exports match on both ends
+const SHARE_MAX_NAME_CHARS = PLANNED_NAME_MAX;
 
 // Keep share URLs inside what browsers, chat apps and link previews handle.
 // A 1 m simplification already collapses a densely sampled line to a handful
@@ -2824,9 +2933,19 @@ function encodePlannedLineForHash(line) {
     .filter(p => p && isFinite(p.lat) && isFinite(p.lon))
     .map(p => ({ lat: p.lat, lon: wrapLon(p.lon) }));
   if (pts.length < 2) return null;
+  // The mission name travels with the line, so the recipient's exports carry
+  // the same name the sender's did. encodeURIComponent escapes & and = too,
+  // so it can never be mistaken for another parameter.
+  const trimmedName = plannedLineName.trim().slice(0, SHARE_MAX_NAME_CHARS);
+  let nameParam = '';
+  try {
+    if (trimmedName) nameParam = `&${SHARE_HASH_KEY_NAME}=${encodeURIComponent(trimmedName)}`;
+  } catch (err) {
+    console.warn('Could not encode the mission name for the share URL:', err);
+  }
   if (pts.length === 2) {
     const fmt = p => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
-    return { param: `${SHARE_HASH_KEY}=${fmt(pts[0])};${fmt(pts[1])}`, tolerance: 0 };
+    return { param: `${SHARE_HASH_KEY}=${fmt(pts[0])};${fmt(pts[1])}${nameParam}`, tolerance: 0 };
   }
   let tolerance = SHARE_BASE_TOLERANCE_M;
   let encoded = encodeLineCompact(simplifyPolyline(pts, tolerance));
@@ -2834,7 +2953,7 @@ function encodePlannedLineForHash(line) {
     tolerance *= 2;
     encoded = encodeLineCompact(simplifyPolyline(pts, tolerance));
   }
-  return { param: `${SHARE_HASH_KEY_COMPACT}=${encoded}`, tolerance };
+  return { param: `${SHARE_HASH_KEY_COMPACT}=${encoded}${nameParam}`, tolerance };
 }
 
 function decodePlannedLineFromHash(hashStr) {
@@ -2843,10 +2962,17 @@ function decodePlannedLineFromHash(hashStr) {
   const inRange = p => p && isFinite(p.lat) && isFinite(p.lon)
     && p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180;
 
+  // Attached to the returned array rather than changing the return shape,
+  // so every existing caller keeps working unchanged.
+  const withName = pts => {
+    pts.missionName = (params.get(SHARE_HASH_KEY_NAME) || '').slice(0, SHARE_MAX_NAME_CHARS);
+    return pts;
+  };
+
   const compact = params.get(SHARE_HASH_KEY_COMPACT);
   if (compact) {
     const pts = decodeLineCompact(compact);
-    return (pts && pts.length >= 2 && pts.every(inRange)) ? pts : null;
+    return (pts && pts.length >= 2 && pts.every(inRange)) ? withName(pts) : null;
   }
   const legacy = params.get(SHARE_HASH_KEY);
   if (!legacy) return null;
@@ -2854,7 +2980,7 @@ function decodePlannedLineFromHash(hashStr) {
     const [lat, lon] = pair.split(',').map(Number);
     return { lat, lon };
   });
-  return (pts.length === 2 && pts.every(inRange)) ? pts : null;
+  return (pts.length === 2 && pts.every(inRange)) ? withName(pts) : null;
 }
 
 // Keeps the URL in step with the planned line — including CLEARING a hash
@@ -2924,9 +3050,10 @@ function restorePlannedLineFromHash() {
   // back/forward, and reloading it would needlessly refit the map.
   const unchanged = plannedLine
     && plannedLine.length === fromHash.length
+    && plannedLineName.trim() === (fromHash.missionName || '').trim()
     && plannedLine.every((p, i) => p.lat === fromHash[i].lat && p.lon === fromHash[i].lon);
   if (unchanged) return;
-  applyPlannedLine(fromHash, 'share');
+  applyPlannedLine(fromHash, 'share', null, fromHash.missionName || '');
 }
 
 // Pasting a share link into an already-open tab only changes the hash — the
@@ -2993,7 +3120,7 @@ const SAMPLE_MISSIONS = [
       applyPlannedLine([
         { lat: m.start.lat, lon: m.start.lon },
         { lat: m.end.lat,   lon: m.end.lon   }
-      ], 'sample');
+      ], 'sample', null, m.label);
     });
     list.appendChild(btn);
   }
@@ -3068,6 +3195,8 @@ async function enrichPlannedLineWithElevation() {
 function exportPlannedLineAsGPX() {
   if (!plannedLine || plannedLine.length < 2) return;
   const now = new Date().toISOString();
+  // escapeHtml emits only predefined/numeric entities, all valid in XML.
+  const name = escapeHtml(plannedNameOrDefault());
   const trkpts = plannedLine.map(p => {
     const eleTag = (p.ele != null && isFinite(p.ele)) ? `<ele>${p.ele}</ele>` : '';
     return `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}">${eleTag}</trkpt>`;
@@ -3078,11 +3207,11 @@ function exportPlannedLineAsGPX() {
      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
      xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
   <metadata>
-    <name>Planned line</name>
+    <name>${name}</name>
     <time>${now}</time>
   </metadata>
   <trk>
-    <name>Planned line</name>
+    <name>${name}</name>
     <trkseg>
 ${trkpts}
     </trkseg>
@@ -3094,7 +3223,7 @@ ${trkpts}
   const a = document.createElement('a');
   a.href = url;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  a.download = `planned-line-${stamp}.gpx`;
+  a.download = `${missionFileSlug('planned-line')}-${stamp}.gpx`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -3137,7 +3266,9 @@ function startDrawLine() {
       const firstPt = drawState.first;
       const secondPt = { lat: e.latlng.lat, lon: e.latlng.lng };
       cancelDrawLine(true);
-      applyPlannedLine([firstPt, secondPt], 'draw');
+      // Keep the mission name: re-placing the endpoints refines the same
+      // mission, it does not start a nameless new one.
+      applyPlannedLine([firstPt, secondPt], 'draw', null, plannedLineName);
     }
   };
   drawState.onMove = (e) => {
@@ -3559,11 +3690,43 @@ enableDrop(plannedDrop, plannedInput, async files => {
     }
     // Same path as drawing, samples and shared links — so a loaded file can
     // never end up with a different set of post-load steps than the rest.
-    await applyPlannedLine(pts, 'file', file.name);
+    // Prefill the mission name from the GPX's own <name>, else the filename.
+    // Our own export writes PLANNED_NAME_FALLBACK when a mission is unnamed —
+    // reading it back as a real name would make "Planned line" stick forever.
+    const embedded = pts.trackName === PLANNED_NAME_FALLBACK ? '' : pts.trackName;
+    const fromFile = embedded || file.name.replace(/\.[^.]+$/, '');
+    await applyPlannedLine(pts, 'file', file.name, fromFile);
   } catch (err) {
     console.error(err);
     plannedLabel.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
   }
+});
+
+// Mission name — kept raw while typing (trimmed only where it gets used) so
+// the caret never jumps, and pushed into the share URL on every keystroke.
+let plannedNameHashTimer = null;
+document.getElementById('plannedName').addEventListener('input', e => {
+  // Not sanitizeMissionName: that trims and collapses runs, which would eat
+  // the space the moment you type one. Only strip what must never get through.
+  plannedLineName = stripLoneSurrogates(
+    e.target.value.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, PLANNED_NAME_MAX)
+  );
+  // Cheap enough to keep in step with every keystroke.
+  if (plannedLayer) plannedLayer.setTooltipContent(plannedNameOrDefault());
+  // Re-encoding a several-thousand-point line on every keystroke is wasteful,
+  // and Safari rate-limits replaceState. copyShareLink() syncs first anyway,
+  // so a click straight after typing still gets the current name.
+  clearTimeout(plannedNameHashTimer);
+  plannedNameHashTimer = setTimeout(syncShareHash, 250);
+});
+
+// On blur, collapse the value to exactly what a session or share link would
+// store, so a reloaded mission is never named slightly differently.
+document.getElementById('plannedName').addEventListener('blur', () => {
+  clearTimeout(plannedNameHashTimer);
+  setPlannedLineName(plannedLineName);
+  if (plannedLayer) plannedLayer.setTooltipContent(plannedNameOrDefault());
+  syncShareHash();
 });
 
 document.getElementById('addTeam').addEventListener('click', addTeam);
@@ -3698,6 +3861,7 @@ function saveSession() {
     version: SESSION_FORMAT_VERSION,
     savedAt: new Date().toISOString(),
     plannedLine: plannedLine || null,
+    plannedLineName: plannedLineName || '',
     teams: [...teams.values()].map(t => ({
       name: t.name,
       color: t.color,
@@ -3709,7 +3873,7 @@ function saveSession() {
   const a = document.createElement('a');
   a.href = url;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  a.download = `mission-session-${stamp}.slm.json`;
+  a.download = `${missionFileSlug('mission-session')}-${stamp}.slm.json`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -3760,6 +3924,9 @@ async function loadSessionFromText(text) {
     plannedLine = null;
     plannedLabel.textContent = 'Click or drop a GPX file';
   }
+  // After plannedLine is settled — setPlannedLineName keys the row's
+  // visibility off it. Sessions saved before naming existed have no name.
+  setPlannedLineName(typeof data.plannedLineName === 'string' ? data.plannedLineName : '');
   drawPlanned();
   plannedLineProfile = null;
   scheduleElevationFetch();
@@ -4095,7 +4262,7 @@ async function exportPdfReport() {
         <div class="print-color-swatch" style="background:${team.color}"></div>
         <div style="flex:1">
           <h2 class="print-title">${escapeHtml(team.name)}</h2>
-          <div class="print-subtitle">Straight Line Mission · Rank ${rank} of ${eligible.length}</div>
+          <div class="print-subtitle">${escapeHtml(plannedLineName.trim() || 'Straight Line Mission')} · Rank ${rank} of ${eligible.length}</div>
         </div>
       </header>
 
@@ -4677,7 +4844,7 @@ async function runVideoExport() {
     const a = document.createElement('a');
     a.href = url;
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    a.download = `straight-line-mission-${ts}.webm`;
+    a.download = `${missionFileSlug('straight-line-mission')}-${ts}.webm`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -4724,6 +4891,17 @@ function drawRoundedRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+// Shorten `text` with an ellipsis until it fits `maxW` in the current font.
+// A long mission name must not run under the header's right-hand stats.
+function ellipsize(ctx, text, maxW) {
+  if (maxW <= 0 || ctx.measureText(text).width <= maxW) return text;
+  // Array.from splits on code points, so an emoji is dropped whole rather
+  // than leaving half a surrogate pair before the ellipsis.
+  const chars = Array.from(text);
+  while (chars.length > 1 && ctx.measureText(chars.join('') + '…').width > maxW) chars.pop();
+  return chars.join('').trimEnd() + '…';
 }
 
 async function exportSummaryCard() {
@@ -4829,17 +5007,22 @@ async function exportSummaryCard() {
     // ----- Header -----
     ctx.fillStyle = '#212529';
     ctx.fillRect(0, 0, W, HEADER_H);
-    ctx.fillStyle = '#fff';
-    ctx.font = '700 30px system-ui, -apple-system, "Segoe UI", sans-serif';
-    ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Straight Line Mission Report', 32, HEADER_H / 2);
+    // Right-hand stats first, so the title knows how much room is left for it.
     ctx.font = '16px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = '#adb5bd';
     ctx.textAlign = 'right';
     const distKm = (haversine(plannedLine[0], plannedLine[plannedLine.length - 1]) / 1000).toFixed(2);
     const teamWord = eligibleTeams.length === 1 ? 'team' : 'teams';
-    ctx.fillText(`${distKm} km planned · ${eligibleTeams.length} ${teamWord}`, W - 32, HEADER_H / 2);
+    const stats = `${distKm} km planned · ${eligibleTeams.length} ${teamWord}`;
+    const statsW = ctx.measureText(stats).width;
+    ctx.fillText(stats, W - 32, HEADER_H / 2);
+    // The mission name headlines the card when there is one.
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 30px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'left';
+    const title = plannedLineName.trim() || 'Straight Line Mission Report';
+    ctx.fillText(ellipsize(ctx, title, W - 64 - statsW - 24), 32, HEADER_H / 2);
 
     // ----- Map snapshot -----
     ctx.drawImage(vmap.getCanvas(), 0, HEADER_H, W, MAP_H);
@@ -4962,7 +5145,7 @@ async function exportSummaryCard() {
       const a = document.createElement('a');
       a.href = url;
       const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      a.download = `mission-summary-${stamp}.png`;
+      a.download = `${missionFileSlug('mission-summary')}-${stamp}.png`;
       document.body.appendChild(a);
       a.click();
       a.remove();
