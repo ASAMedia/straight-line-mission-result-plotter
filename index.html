@@ -1807,6 +1807,70 @@ function cumulativeDistances(track) {
   return out;
 }
 
+// Douglas–Peucker simplification, tolerance in metres. Drops points that lie
+// within `tolM` of the line their neighbours already describe, so the shape
+// survives but the point count collapses — a 2000-point sampled line becomes
+// a handful of points that render identically. Used to keep share URLs short.
+//
+// The measuring happens in spherical Mercator — the space Leaflet draws a
+// polyline straight in — so the tolerance bounds how far the simplified line
+// can move ON THE MAP. Measuring in a local flat projection instead lets a
+// line that is straight in lat/lon collapse to its endpoints, which then get
+// drawn along a visibly different (Mercator-straight) path.
+function simplifyPolyline(pts, tolM) {
+  if (!pts || pts.length <= 2) return (pts || []).slice();
+  const clampLat = lat => Math.max(-89.5, Math.min(89.5, lat));
+  const X = pts.map(p => R_EARTH * toRad(p.lon));
+  const Y = pts.map(p => R_EARTH * Math.log(Math.tan(Math.PI / 4 + toRad(clampLat(p.lat)) / 2)));
+  // Mercator stretches distance by 1/cos(lat); taking the highest latitude on
+  // the line keeps the bound honest along the whole of it.
+  let maxAbsLat = 0;
+  for (const p of pts) maxAbsLat = Math.max(maxAbsLat, Math.abs(clampLat(p.lat)));
+  const groundPerMercatorMetre = Math.max(Math.cos(toRad(maxAbsLat)), 1e-6);
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const tol2 = (tolM / groundPerMercatorMetre) ** 2;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const dx = X[b] - X[a], dy = Y[b] - Y[a];
+    const len2 = dx * dx + dy * dy;
+    let far = -1, farD2 = tol2;
+    for (let i = a + 1; i < b; i++) {
+      let t = len2 > 0 ? ((X[i] - X[a]) * dx + (Y[i] - Y[a]) * dy) / len2 : 0;
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      const ex = X[i] - (X[a] + t * dx), ey = Y[i] - (Y[a] + t * dy);
+      const d2 = ex * ex + ey * ey;
+      if (d2 > farD2) { farD2 = d2; far = i; }
+    }
+    if (far > 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+// N points spaced evenly by distance ALONG the track — following every bend,
+// not the start→end chord. Used to sample a line for elevation lookups.
+function resampleAlongTrack(track, n) {
+  if (!track || track.length < 2 || n < 2) return (track || []).slice();
+  const cum = cumulativeDistances(track);
+  const total = cum[cum.length - 1];
+  if (!(total > 0)) return [track[0], track[track.length - 1]];
+  const out = [];
+  let seg = 0;
+  for (let i = 0; i < n; i++) {
+    const target = total * i / (n - 1);
+    while (seg < track.length - 2 && cum[seg + 1] < target) seg++;
+    const spanned = cum[seg + 1] - cum[seg];
+    const t = spanned > 0 ? (target - cum[seg]) / spanned : 0;
+    out.push({
+      lat: track[seg].lat + (track[seg + 1].lat - track[seg].lat) * t,
+      lon: track[seg].lon + (track[seg + 1].lon - track[seg].lon) * t
+    });
+  }
+  return out;
+}
+
 // Elevation stats for a track. Uses a small threshold to suppress GPS noise
 // when summing ascent/descent.
 function elevationStats(track, noiseThresholdMeters = 1) {
@@ -2641,18 +2705,24 @@ function attachProfileHover(svg, track, color = '#0d6efd') {
 
 // Shared post-load: everything that has to happen after plannedLine is set,
 // whether it came from a file upload or from drawing on the map.
-async function applyPlannedLine(pts, source = 'file') {
+async function applyPlannedLine(pts, source = 'file', fileName = null) {
   if (!pts || pts.length < 2) return;
   plannedLine = pts;
   const label = document.getElementById('plannedLabel');
+  const count = pts.length.toLocaleString();
   if (source === 'draw') {
-    label.innerHTML = `<span class="file-loaded">✓ Line drawn on map</span><span class="badge">${pts.length} pts</span>`;
+    label.innerHTML = `<span class="file-loaded">✓ Line drawn on map</span><span class="badge">${count} pts</span>`;
   } else if (source === 'sample') {
-    label.innerHTML = `<span class="file-loaded">✓ Sample mission</span><span class="badge">${pts.length} pts</span>`;
+    label.innerHTML = `<span class="file-loaded">✓ Sample mission</span><span class="badge">${count} pts</span>`;
   } else if (source === 'share') {
-    label.innerHTML = `<span class="file-loaded">✓ Loaded from shared link</span><span class="badge">${pts.length} pts</span>`;
+    label.innerHTML = `<span class="file-loaded">✓ Loaded from shared link</span><span class="badge">${count} pts</span>`;
+  } else if (fileName) {
+    label.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(fileName)}</span><span class="badge">${count} pts</span>`;
   }
   drawPlanned();
+  // Drop the old line's sampled elevations BEFORE rendering, or the info card
+  // spends the fetch showing the previous line's profile and ascent figures.
+  plannedLineProfile = null;
   renderPlannedInfo();
   for (const team of teams.values()) {
     computeTeamStats(team);
@@ -2662,51 +2732,167 @@ async function applyPlannedLine(pts, source = 'file') {
   renderLeaderboard();
   sync3DData();
   syncShareHash();
-  plannedLineProfile = null;
   scheduleElevationFetch();
   fitMap();
 }
 
 // ============================================================================
-// Shareable URL — encodes a 2-point planned line in the URL hash so the
-// link itself carries the mission. Auto-syncs whenever the planned line
-// changes; on page load, restores any line present in the hash.
+// Shareable URL — encodes the planned line in the URL hash so the link itself
+// carries the mission. Auto-syncs whenever the planned line changes; on page
+// load, restores any line present in the hash.
+//
+// Two encodings, because most missions are a simple pair of endpoints and a
+// readable URL is worth keeping:
+//   line=<lat,lon;lat,lon>  two-point lines, human-readable (also the format
+//                           of every link shared before multi-point support)
+//   l=<compact>             anything else — the full polyline, so a sampled
+//                           GPX route arrives as the same shape it left as
 // ============================================================================
-const SHARE_HASH_KEY = 'line';
+const SHARE_HASH_KEY = 'line';       // legacy / two-point, human-readable
+const SHARE_HASH_KEY_COMPACT = 'l';  // full polyline, compactly encoded
 
+// Keep share URLs inside what browsers, chat apps and link previews handle.
+// A 1 m simplification already collapses a densely sampled line to a handful
+// of points; only genuinely winding routes ever need a coarser one.
+const SHARE_MAX_ENCODED_CHARS = 4000;
+const SHARE_BASE_TOLERANCE_M = 1;
+
+// The Google encoded-polyline algorithm (zig-zag varint deltas at 1e-5°,
+// ~1.1 m) but emitting only [A-Za-z0-9-_], so the result survives a URL
+// fragment verbatim: nothing here needs percent-escaping, and nothing here
+// is a character URLSearchParams treats as a separator.
+const SHARE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const SHARE_ALPHABET_INDEX = (() => {
+  const m = Object.create(null);
+  for (let i = 0; i < SHARE_ALPHABET.length; i++) m[SHARE_ALPHABET[i]] = i;
+  return m;
+})();
+
+function encodeLineCompact(pts) {
+  const out = [];
+  const pushDelta = value => {
+    let n = value < 0 ? ~(value << 1) : (value << 1);
+    while (n >= 0x20) { out.push(SHARE_ALPHABET[(n & 0x1f) | 0x20]); n >>>= 5; }
+    out.push(SHARE_ALPHABET[n]);
+  };
+  let prevLat = 0, prevLon = 0;
+  for (const p of pts) {
+    const lat = Math.round(p.lat * 1e5), lon = Math.round(p.lon * 1e5);
+    pushDelta(lat - prevLat);
+    pushDelta(lon - prevLon);
+    prevLat = lat; prevLon = lon;
+  }
+  return out.join('');
+}
+
+// Returns null on anything malformed — a hand-mangled URL must not produce a
+// half-decoded line that looks plausible.
+function decodeLineCompact(str) {
+  const pts = [];
+  let i = 0, lat = 0, lon = 0;
+  const readDelta = () => {
+    let shift = 0, result = 0, b;
+    do {
+      if (i >= str.length) return null;
+      b = SHARE_ALPHABET_INDEX[str[i++]];
+      if (b === undefined) return null;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+      if (shift > 30) return null; // longer than any delta we would ever emit
+    } while (b & 0x20);
+    return (result & 1) ? ~(result >>> 1) : (result >>> 1);
+  };
+  while (i < str.length) {
+    const dLat = readDelta(); if (dLat === null) return null;
+    const dLon = readDelta(); if (dLon === null) return null;
+    lat += dLat; lon += dLon;
+    pts.push({ lat: lat / 1e5, lon: lon / 1e5 });
+  }
+  return pts;
+}
+
+// Returns { param, tolerance } — `tolerance` is how far, in metres, the
+// encoded line may sit from the one on screen, beyond the ~1 m both formats
+// quantise to — or null when there is nothing shareable.
 function encodePlannedLineForHash(line) {
-  if (!line || line.length !== 2) return null;
-  const fmt = p => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
-  return `${SHARE_HASH_KEY}=${fmt(line[0])};${fmt(line[1])}`;
+  if (!line) return null;
+  // Leaflet reports longitudes unwrapped, so a line drawn after panning past
+  // the edge of the world carries values like 371.4. Encoding those verbatim
+  // produced a link the decoder rejected outright — a dead share link.
+  const wrapLon = lon => ((lon + 180) % 360 + 360) % 360 - 180;
+  const pts = line
+    .filter(p => p && isFinite(p.lat) && isFinite(p.lon))
+    .map(p => ({ lat: p.lat, lon: wrapLon(p.lon) }));
+  if (pts.length < 2) return null;
+  if (pts.length === 2) {
+    const fmt = p => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
+    return { param: `${SHARE_HASH_KEY}=${fmt(pts[0])};${fmt(pts[1])}`, tolerance: 0 };
+  }
+  let tolerance = SHARE_BASE_TOLERANCE_M;
+  let encoded = encodeLineCompact(simplifyPolyline(pts, tolerance));
+  while (encoded.length > SHARE_MAX_ENCODED_CHARS && tolerance < 10_000) {
+    tolerance *= 2;
+    encoded = encodeLineCompact(simplifyPolyline(pts, tolerance));
+  }
+  return { param: `${SHARE_HASH_KEY_COMPACT}=${encoded}`, tolerance };
 }
 
 function decodePlannedLineFromHash(hashStr) {
   if (!hashStr) return null;
   const params = new URLSearchParams(hashStr.replace(/^#/, ''));
-  const v = params.get(SHARE_HASH_KEY);
-  if (!v) return null;
-  const pts = v.split(';').map(pair => {
+  const inRange = p => p && isFinite(p.lat) && isFinite(p.lon)
+    && p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180;
+
+  const compact = params.get(SHARE_HASH_KEY_COMPACT);
+  if (compact) {
+    const pts = decodeLineCompact(compact);
+    return (pts && pts.length >= 2 && pts.every(inRange)) ? pts : null;
+  }
+  const legacy = params.get(SHARE_HASH_KEY);
+  if (!legacy) return null;
+  const pts = legacy.split(';').map(pair => {
     const [lat, lon] = pair.split(',').map(Number);
-    if (!isFinite(lat) || !isFinite(lon)) return null;
-    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
     return { lat, lon };
-  }).filter(Boolean);
-  return pts.length === 2 ? pts : null;
+  });
+  return (pts.length === 2 && pts.every(inRange)) ? pts : null;
 }
 
+// Keeps the URL in step with the planned line — including CLEARING a hash
+// that no longer describes it. Leaving the previous line's hash in place is
+// how "Copy share link" used to hand out a link to a completely different
+// mission after a multi-point GPX was loaded.
 function syncShareHash() {
   const encoded = encodePlannedLineForHash(plannedLine);
-  if (encoded) {
-    history.replaceState(null, '', '#' + encoded);
+  const nextHash = encoded ? '#' + encoded.param : '';
+  if (location.hash !== nextHash) {
+    // Some browsers refuse replaceState on a file:// page. Losing the URL
+    // sync there is survivable; losing the rest of the load is not.
+    try {
+      history.replaceState(null, '', nextHash || location.pathname + location.search);
+    } catch (err) {
+      console.warn('Could not update the share URL:', err);
+    }
   }
+  return encoded;
 }
 
 async function copyShareLink() {
-  syncShareHash();
-  const url = location.href;
+  const encoded = syncShareHash();
   const btn = document.getElementById('copyShareLink');
   const labelSpan = btn && btn.querySelector('.share-label');
-  const originalText = labelSpan ? labelSpan.textContent : 'Copy share link';
+  const originalText = 'Copy share link';
+  if (!encoded) {
+    if (labelSpan) {
+      labelSpan.textContent = 'Nothing to share';
+      setTimeout(() => { labelSpan.textContent = originalText; }, 1800);
+    }
+    return;
+  }
+  const url = location.href;
+  // Say so when the line had to be simplified to fit the URL, rather than
+  // quietly handing over a link to a slightly different line.
+  const note = encoded.tolerance > SHARE_BASE_TOLERANCE_M
+    ? ` (±${Math.round(encoded.tolerance)} m)` : '';
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(url);
@@ -2718,7 +2904,7 @@ async function copyShareLink() {
       ta.remove();
     }
     if (labelSpan) {
-      labelSpan.textContent = 'Copied ✓';
+      labelSpan.textContent = 'Copied ✓' + note;
       setTimeout(() => { labelSpan.textContent = originalText; }, 1800);
     }
   } catch (err) {
@@ -2730,10 +2916,27 @@ async function copyShareLink() {
 // On page load, if the URL hash already contains a planned line, restore
 // it (no waiting for the user to upload a file). Runs after main script
 // initialization so the planned-line UI is already wired up.
-(() => {
+function restorePlannedLineFromHash() {
   const fromHash = decodePlannedLineFromHash(location.hash);
-  if (fromHash) {
-    setTimeout(() => applyPlannedLine(fromHash, 'share'), 0);
+  if (!fromHash) return;
+  // Our own syncShareHash() uses replaceState, which fires no hashchange —
+  // but a re-encode of the line already on screen would still land here via
+  // back/forward, and reloading it would needlessly refit the map.
+  const unchanged = plannedLine
+    && plannedLine.length === fromHash.length
+    && plannedLine.every((p, i) => p.lat === fromHash[i].lat && p.lon === fromHash[i].lon);
+  if (unchanged) return;
+  applyPlannedLine(fromHash, 'share');
+}
+
+// Pasting a share link into an already-open tab only changes the hash — the
+// page never reloads. Without this the map would keep showing the previous
+// line while the URL advertised a different one.
+window.addEventListener('hashchange', restorePlannedLineFromHash);
+
+(() => {
+  if (decodePlannedLineFromHash(location.hash)) {
+    setTimeout(restorePlannedLineFromHash, 0);
   }
 })();
 
@@ -2803,11 +3006,11 @@ const SAMPLE_MISSIONS = [
 })();
 
 // ============================================================================
-// Planned-line elevation profile — for drawn lines and simple 2-point GPX
-// files that don't carry their own elevation data, we sample N points along
-// the line and ask Open-Meteo's free elevation API (no key, supports CORS)
-// to fill them in. Token-based cancellation lets a new line's fetch
-// supersede an in-flight one.
+// Planned-line elevation profile — for lines that don't carry their own
+// elevation data (drawn lines, shared links, GPX files without <ele>), we
+// sample N points along the line and ask Open-Meteo's free elevation API
+// (no key, supports CORS) to fill them in. Token-based cancellation lets a
+// new line's fetch supersede an in-flight one.
 // ============================================================================
 
 let elevationFetchTimer = null;
@@ -2836,16 +3039,9 @@ async function enrichPlannedLineWithElevation() {
 
   const token = ++elevationFetchToken;
   const N = 80;
-  const samples = [];
-  for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
-    // Linear interpolation is sub-meter-accurate vs great-circle for
-    // typical straight-line mission distances (< 200 km).
-    samples.push({
-      lat: plannedLine[0].lat + (plannedLine[plannedLine.length - 1].lat - plannedLine[0].lat) * t,
-      lon: plannedLine[0].lon + (plannedLine[plannedLine.length - 1].lon - plannedLine[0].lon) * t
-    });
-  }
+  // Sample along the line itself, bends included — sampling the start→end
+  // chord instead would profile terrain the line never crosses.
+  const samples = resampleAlongTrack(plannedLine, N);
 
   try {
     const lats = samples.map(p => p.lat.toFixed(5)).join(',');
@@ -3361,21 +3557,9 @@ enableDrop(plannedDrop, plannedInput, async files => {
       plannedLabel.innerHTML = `<span class="file-error">Need at least 2 points for a line</span>`;
       return;
     }
-    plannedLine = pts;
-    plannedLabel.innerHTML = `<span class="file-loaded">✓ ${escapeHtml(file.name)}</span><span class="badge">${pts.length.toLocaleString()} pts</span>`;
-    drawPlanned();
-    renderPlannedInfo();
-    for (const team of teams.values()) {
-      computeTeamStats(team);
-      drawTeam(team);
-      renderTeamStats(team);
-    }
-    renderLeaderboard();
-    sync3DData();
-    syncShareHash();
-    plannedLineProfile = null;
-    scheduleElevationFetch();
-    fitMap();
+    // Same path as drawing, samples and shared links — so a loaded file can
+    // never end up with a different set of post-load steps than the rest.
+    await applyPlannedLine(pts, 'file', file.name);
   } catch (err) {
     console.error(err);
     plannedLabel.innerHTML = `<span class="file-error">Error: ${escapeHtml(err.message)}</span>`;
@@ -3580,6 +3764,7 @@ async function loadSessionFromText(text) {
   plannedLineProfile = null;
   scheduleElevationFetch();
   renderPlannedInfo();
+  syncShareHash();
 
   // 3. Restore teams.
   for (const t of teamList) {
